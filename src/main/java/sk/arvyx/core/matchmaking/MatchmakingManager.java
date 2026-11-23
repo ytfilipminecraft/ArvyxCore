@@ -87,7 +87,9 @@ public final class MatchmakingManager {
     }
 
     public void attachRuntime(ConfigManager configManager, MessageFormatter messageFormatter) {
-        this(configManager, messageFormatter, null);
+        this.configManager = configManager;
+        this.messageFormatter = messageFormatter;
+        this.plugin = null;
     }
 
     public void attachRuntime(ConfigManager configManager, MessageFormatter messageFormatter, Plugin plugin) {
@@ -198,11 +200,6 @@ public final class MatchmakingManager {
             return false;
         }
 
-        Optional<Arena> arenaOpt = arenaManager.getArena(arenaId);
-        if (arenaOpt.isEmpty()) {
-            return false;
-        }
-        Arena arena = arenaOpt.get();
         String requestId = message.getPayloadValue("requestId");
         if (requestId == null || requestId.isBlank()
                 || !message.getSourceServerId().matches("[a-zA-Z0-9_-]+")
@@ -210,8 +207,11 @@ public final class MatchmakingManager {
             return false;
         }
 
-        boolean reserved = arena.reserveSlot(playerUuid, expiresAt, Instant.now());
+        Optional<Arena> arenaOpt = arenaManager.getArena(arenaId);
+        boolean reserved = arenaOpt.isPresent()
+                && arenaOpt.get().reserveSlot(playerUuid, expiresAt, Instant.now());
         if (reserved) {
+            Arena arena = arenaOpt.orElseThrow();
             logger.debug("Rezervované miesto v aréne '" + arena.getId() + "' pre hráča " + playerUuid);
             networkManager.publishArenaStatus(ArenaStatusSnapshot.fromArena(localServerId, arena));
         }
@@ -454,8 +454,8 @@ public final class MatchmakingManager {
 
     public int cleanupExpiredReservations(Instant now) {
         Objects.requireNonNull(now, "now nesmie byť null");
-        int removed = pruneExpiredOutboundReservations(now);
-        removed += expirePendingTransfers(now);
+        int removed = expirePendingTransfers(now);
+        removed += pruneExpiredOutboundReservations(now);
         for (Arena arena : arenaManager.getAllArenas()) {
             removed += arena.pruneExpiredReservations(now);
         }
