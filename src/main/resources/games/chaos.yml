@@ -1,0 +1,59 @@
+# ==============================================================================
+# ArvyxCore - Konfigurácia herného režimu Chaos
+# Pripravené na budúcu integráciu so streamovacími udalosťami (bez nefunkčných tokenov).
+# ==============================================================================
+
+chaos:
+  match-duration-seconds: 300
+  countdown-seconds: 15
+  auto-random-events: true
+  random-event-interval-seconds: 25
+  max-concurrent-events: 2
+
+  streaming:
+    enabled: false
+    allow-manual-triggers: true
+
+  events:
+    LOW_GRAVITY:
+      enabled: true
+      name: "Nízka gravitácia"
+      description: "Všetci hráči v aréne pocítia mesačnú gravitáciu."
+      duration-seconds: 18
+      cooldown-seconds: 30
+      gravity-multiplier: 0.35
+
+    KNOCKBACK_STICK:
+      enabled: true
+      name: "Odhadzovacia palica"
+      description: "Každý hráč získa dočasnú palicu s extrémnym odhodením."
+      duration-seconds: 20
+      cooldown-seconds: 35
+      knockback-level: 4
+
+    TNT_RAIN:
+      enabled: true
+      name: "Dážď TNT"
+      description: "Z oblohy nad arénou padajú zapálené TNT bloky."
+      duration-seconds: 12
+      cooldown-seconds: 40
+      spawn-interval-ticks: 20
+      tnt-per-wave: 3
+      spawn-height: 14.0
+      spread-radius: 16.0
+
+    SPEED_BOOST:
+      enabled: true
+      name: "Hyper rýchlosť"
+      description: "Hráči získajú výrazné zrýchlenie pohybu."
+      duration-seconds: 15
+      cooldown-seconds: 25
+      amplifier: 2
+
+    CHAOS_FOG:
+      enabled: true
+      name: "Chaos hmla"
+      description: "Arénu zahalí hustá temná hmla znižujúca viditeľnosť."
+      duration-seconds: 14
+      cooldown-seconds: 35
+      amplifier: 0

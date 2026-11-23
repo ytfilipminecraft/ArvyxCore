@@ -1,0 +1,60 @@
+# ==============================================================================
+# ArvyxCore - Jazyková a vizuálna konfigurácia správ (MiniMessage)
+# Farebná identita: tmavé pozadie, fialová (#8A2BE2), kráľovská modrá (#4169E1)
+# ==============================================================================
+
+prefix: "<gradient:#8A2BE2:#4169E1>[ARVYX]</gradient>"
+
+general:
+  no-permission: "<prefix> <#EF4444>Na vykonanie tohto príkazu nemáš dostatočné oprávnenia."
+  player-only: "<prefix> <#EF4444>Tento príkaz môže použiť iba hráč."
+  unknown-subcommand: "<prefix> <#94A3B8>Neznámy príkaz. Použi <#C084FC>/arvyx <info|reload|arenas|arena|start|stop|reset|event><#94A3B8>."
+  reload-success: "<prefix> <#22C55E>Konfigurácia ArvyxCore bola bezpečne znova načítaná."
+  reload-failed: "<prefix> <#EF4444>Pri načítaní konfigurácie nastala chyba. Skontroluj konzolu."
+
+command:
+  info-header: "<dark_gray><st>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</st>"
+  info-title: "<prefix> <gradient:#A855F7:#60A5FA><bold>ARVYX NETWORK</bold></gradient> <#94A3B8>| <#E2E8F0>Core v<version>"
+  info-details: "<#94A3B8>Server: <#C084FC><server_id> <#94A3B8>| Rola: <#60A5FA><server_role> <#94A3B8>| Arény: <#E2E8F0><arena_count> <#94A3B8>| Hráči: <#E2E8F0><player_count>"
+  info-commands: "<#94A3B8>Príkazy: <#C084FC>/arvyx <arenas|arena|start|stop|reset|event|reload>"
+  arenas-header: "<prefix> <#E2E8F0>Zoznam registrovaných arén (<#C084FC><count><#E2E8F0>):"
+  arenas-empty: "<prefix> <#94A3B8>Momentálne nie sú nakonfigurované žiadne arény."
+  arenas-entry: " <#60A5FA>▪ <#E2E8F0><id> <#94A3B8>(<type>) | Stav: <state_color><state> <#94A3B8>| Hráči: <#E2E8F0><players>/<max>"
+  arena-not-found: "<prefix> <#EF4444>Aréna s ID <#E2E8F0><id> <#EF4444>neexistuje."
+  arena-details: "<prefix> <#E2E8F0>Aréna <#C084FC><name> <#94A3B8>[<id>] | Režim: <#60A5FA><type> <#94A3B8>| Stav: <state_color><state> <#94A3B8>| Hráči: <#E2E8F0><players>/<max> <#94A3B8>(min. <min>)"
+  arena-start-success: "<prefix> <#22C55E>Štart arény <#E2E8F0><id> <#22C55E>bol iniciovaný."
+  arena-start-failed: "<prefix> <#EF4444>Arénu <#E2E8F0><id> <#EF4444>nie je možné spustiť: <reason>"
+  arena-stop-success: "<prefix> <#F59E0B>Aréna <#E2E8F0><id> <#F59E0B>bola bezpečne zastavená."
+  arena-stop-failed: "<prefix> <#EF4444>Arénu <#E2E8F0><id> <#EF4444>nie je možné zastaviť: <reason>"
+  arena-reset-success: "<prefix> <#22C55E>Bezpečný reset arény <#E2E8F0><id> <#22C55E>bol dokončený."
+  arena-reset-failed: "<prefix> <#EF4444>Reset arény <#E2E8F0><id> <#EF4444>zlyhal: <reason>"
+  event-usage: "<prefix> <#94A3B8>Použitie: <#C084FC>/arvyx event <arenaId> <eventId>"
+  event-triggered: "<prefix> <#C084FC>Udalosť <#E2E8F0><event> <#C084FC>bola aktivovaná v aréne <#60A5FA><arena><#C084FC>."
+  event-failed: "<prefix> <#EF4444>Nepodarilo sa aktivovať udalosť: <reason>"
+
+arena:
+  join-success: "<prefix> <#E2E8F0>Pripojil si sa do arény <#C084FC><arena> <#94A3B8>(<players>/<max>)."
+  leave-success: "<prefix> <#94A3B8>Opustil si arénu <#E2E8F0><arena><#94A3B8>."
+  already-in-arena: "<prefix> <#EF4444>Už si priradený v aréne <#E2E8F0><arena><#EF4444>. Najprv ju opusť."
+  cannot-join-state: "<prefix> <#EF4444>Do arény <#E2E8F0><arena> <#EF4444>sa teraz nedá pripojiť (Stav: <state>)."
+  arena-full: "<prefix> <#EF4444>Aréna <#E2E8F0><arena> <#EF4444>je plná."
+  returning-lobby: "<prefix> <#60A5FA>Presúvame ťa späť na lobby server..."
+
+countdown:
+  tick: "<prefix> <#E2E8F0>Hra začína za <#C084FC><seconds>s<#E2E8F0>."
+  started: "<prefix> <gradient:#8A2BE2:#4169E1><bold>ZÁPAS SA ZAČAL!</bold></gradient> <#E2E8F0>Veľa šťastia."
+  cancelled-low-players: "<prefix> <#F59E0B>Odpočítavanie bolo zrušené pre nedostatok hráčov."
+
+skyrush:
+  grace-start: "<prefix> <#60A5FA>Ochranná lehota trvá <#E2E8F0><seconds>s<#60A5FA>. Priprav sa na boj!"
+  grace-end: "<prefix> <#EF4444>Ochranná lehota skončila! PvP je aktívne."
+  supply-drop: "<prefix> <gradient:#A855F7:#60A5FA><bold>SUPPLY DROP!</bold></gradient> <#E2E8F0>Na strede mapy sa objavila zásobovacia truhlica."
+  chest-refill: "<prefix> <#C084FC>Loot truhlice na ostrovoch aj v strede boli doplnené!"
+  eliminated: "<prefix> <#94A3B8>Hráč <#E2E8F0><player> <#94A3B8>bol eliminovaný. Zostáva <#C084FC><remaining> <#94A3B8>hráčov."
+  winner: "<prefix> <gradient:#8A2BE2:#4169E1><bold>VÍŤAZ SKYRUSH:</bold></gradient> <#E2E8F0><winner> <#94A3B8>(<kills> zabití)"
+  time-limit-winner: "<prefix> <#60A5FA>Časový limit vypršal! Víťazom sa stáva <#E2E8F0><winner><#60A5FA>."
+
+chaos:
+  event-activated: "<prefix> <gradient:#A855F7:#60A5FA><bold>CHAOS UDALOSŤ:</bold></gradient> <#E2E8F0><event_name> <#94A3B8>(<duration>s) — <description>"
+  event-ended: "<prefix> <#94A3B8>Chaos udalosť <#C084FC><event_name> <#94A3B8>skončila."
+  winner: "<prefix> <gradient:#8A2BE2:#4169E1><bold>VÍŤAZ CHAOS:</bold></gradient> <#E2E8F0><winner>"

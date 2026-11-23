@@ -1,0 +1,6 @@
+{
+  "name": "ArvyxCore",
+  "description": "Modular network and minigame core plugin for ARVYX NETWORK (Paper 26.3 / Java 25)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

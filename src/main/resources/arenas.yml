@@ -1,0 +1,107 @@
+# ==============================================================================
+# ArvyxCore - Konfigurácia arén
+# Názvy svetov a súradnice sú plne konfigurovateľné pre každý server siete.
+# ==============================================================================
+
+arenas:
+  skyrush-a1:
+    name: "SkyRush - Nebeské Ostrovy"
+    type: "SKYRUSH"
+    enabled: true
+    world: "skyrush_arena_1"
+    min-players: 2
+    max-players: 8
+    countdown-seconds: 10
+    match-duration-seconds: 240
+    lobby-spawn:
+      x: 0.5
+      y: 90.0
+      z: 0.5
+      yaw: 0.0
+      pitch: 0.0
+    center:
+      x: 0.5
+      y: 66.0
+      z: 0.5
+    spawns:
+      - x: 40.5
+        y: 65.0
+        z: 0.5
+        yaw: 90.0
+        pitch: 0.0
+      - x: -39.5
+        y: 65.0
+        z: 0.5
+        yaw: -90.0
+        pitch: 0.0
+      - x: 0.5
+        y: 65.0
+        z: 40.5
+        yaw: 180.0
+        pitch: 0.0
+      - x: 0.5
+        y: 65.0
+        z: -39.5
+        yaw: 0.0
+        pitch: 0.0
+      - x: 28.5
+        y: 65.0
+        z: 28.5
+        yaw: 135.0
+        pitch: 0.0
+      - x: -27.5
+        y: 65.0
+        z: 28.5
+        yaw: -135.0
+        pitch: 0.0
+      - x: 28.5
+        y: 65.0
+        z: -27.5
+        yaw: 45.0
+        pitch: 0.0
+      - x: -27.5
+        y: 65.0
+        z: -27.5
+        yaw: -45.0
+        pitch: 0.0
+
+  chaos-a1:
+    name: "Chaos - Stream Aréna"
+    type: "CHAOS"
+    enabled: true
+    world: "chaos_arena_1"
+    min-players: 2
+    max-players: 16
+    countdown-seconds: 15
+    match-duration-seconds: 300
+    lobby-spawn:
+      x: 0.5
+      y: 80.0
+      z: 0.5
+      yaw: 0.0
+      pitch: 0.0
+    center:
+      x: 0.5
+      y: 65.0
+      z: 0.5
+    spawns:
+      - x: 18.5
+        y: 65.0
+        z: 0.5
+        yaw: 90.0
+        pitch: 0.0
+      - x: -17.5
+        y: 65.0
+        z: 0.5
+        yaw: -90.0
+        pitch: 0.0
+      - x: 0.5
+        y: 65.0
+        z: 18.5
+        yaw: 180.0
+        pitch: 0.0
+      - x: 0.5
+        y: 65.0
+        z: -17.5
+        yaw: 0.0
+        pitch: 0.0

@@ -1,0 +1,61 @@
+# ==============================================================================
+# ArvyxCore - Hlavná konfigurácia siete ARVYX NETWORK
+# DÔLEŽITÉ: Nikdy sem neukladajte heslá, tokeny ani Velocity forwarding secret.
+# ==============================================================================
+
+server:
+  # Identifikátor tohto backend servera v sieti (napr. lobby, skyrush-1, chaos-1)
+  id: "skyrush-1"
+  # Rola servera: LOBBY, SKYRUSH, CHAOS, STANDALONE
+  role: "SKYRUSH"
+  # Zobrazovaný názov servera
+  display-name: "SkyRush #1"
+
+network:
+  # Názov proxy vrstvy (informatívne, plugin nemení nastavenia Velocity)
+  proxy: "velocity"
+  # Cieľový lobby server v rámci Velocity siete pre bezpečný návrat hráčov
+  lobby-server: "lobby"
+  # Interval odosielania stavových aktualizácií medzi modulmi (v sekundách)
+  heartbeat-interval-seconds: 15
+  # Príprava na budúcu Redis integráciu (plugin funguje plne aj bez Redis)
+  redis:
+    enabled: false
+    channel-prefix: "arvyx:network"
+
+lobby:
+  # Ak je zapnuté, hráč sa pri návrate do lobby presunie cez Velocity plugin messaging
+  use-velocity-transfer: true
+  # Lokálny fallback spawn, ak transfer cez proxy nie je dostupný alebo ide o lokálny server
+  fallback-spawn:
+    world: "world"
+    x: 0.5
+    y: 65.0
+    z: 0.5
+    yaw: 0.0
+    pitch: 0.0
+
+countdown:
+  # Predvolený čas odpočítavania pred štartom zápasu (v sekundách)
+  default-seconds: 15
+  # Sekundy, pri ktorých sa hráčom zobrazí upozornenie a prehrá zvuk
+  notify-intervals:
+    - 30
+    - 15
+    - 10
+    - 5
+    - 4
+    - 3
+    - 2
+    - 1
+
+reset:
+  # Čakanie vo fáze ENDING pred začiatkom bezpečného resetu arény (v sekundách)
+  ending-delay-seconds: 5
+  # Obnoviť inventár, zdravie, hlad a herný mód hráčom pri resete
+  restore-player-state: true
+  # Odstrániť dočasné herné entity (položené predmety, TNT, šípy)
+  clear-temporary-entities: true
+
+logging:
+  debug: false

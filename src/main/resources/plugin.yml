@@ -1,0 +1,46 @@
+name: ArvyxCore
+version: '${version}'
+main: sk.arvyx.core.ArvyxCore
+api-version: '26.3'
+description: Základný modulárny sieťový a herný plugin pre ARVYX NETWORK.
+authors:
+  - ARVYX NETWORK
+website: https://arvyx.sk
+
+commands:
+  arvyx:
+    description: Hlavný správcovský príkaz siete ARVYX NETWORK.
+    usage: /arvyx <info|reload|arenas|arena|start|stop|reset|event>
+    aliases:
+      - ac
+      - arvyxcore
+
+permissions:
+  arvyx.admin:
+    description: Plný prístup ku všetkým príkazom ArvyxCore.
+    default: op
+    children:
+      arvyx.reload: true
+      arvyx.arena: true
+      arvyx.start: true
+      arvyx.stop: true
+      arvyx.reset: true
+      arvyx.event: true
+  arvyx.reload:
+    description: Umožňuje znova načítať konfiguráciu pluginu.
+    default: op
+  arvyx.arena:
+    description: Umožňuje zobrazovať zoznam arén a ich podrobnosti.
+    default: op
+  arvyx.start:
+    description: Umožňuje manuálne spustiť arénu.
+    default: op
+  arvyx.stop:
+    description: Umožňuje bezpečne zastaviť arénu.
+    default: op
+  arvyx.reset:
+    description: Umožňuje resetovať arénu.
+    default: op
+  arvyx.event:
+    description: Umožňuje aktivovať Chaos udalosti v aréne.
+    default: op
