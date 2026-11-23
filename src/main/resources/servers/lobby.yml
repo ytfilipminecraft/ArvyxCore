@@ -1,0 +1,29 @@
+# Konfigurácia pre server: lobby (port 25566 za Velocity proxy)
+server:
+  id: "lobby"
+  role: "LOBBY"
+  display-name: "Hlavné Lobby"
+
+network:
+  proxy: "velocity"
+  lobby-server: "lobby"
+  heartbeat-interval-seconds: 10
+  server-timeout-seconds: 30
+  redis:
+    enabled: true
+    host: "127.0.0.1"
+    port: 6379
+    ssl: false
+    timeout-ms: 2000
+    password-env: "ARVYX_REDIS_PASSWORD"
+    channel-prefix: "arvyx:network"
+
+lobby:
+  use-velocity-transfer: false
+  fallback-spawn:
+    world: "world"
+    x: 0.5
+    y: 65.0
+    z: 0.5
+    yaw: 0.0
+    pitch: 0.0

@@ -38,6 +38,7 @@ public final class PlayerManager {
 
     private JavaPlugin plugin;
     private MessageFormatter messageFormatter;
+    private String localServerId = "standalone";
     private String lobbyServerName = "lobby";
     private boolean useVelocityTransfer = true;
     private ArenaLocation fallbackLobbySpawn = new ArenaLocation("world", 0.5, 65.0, 0.5);
@@ -51,6 +52,7 @@ public final class PlayerManager {
     public void attachRuntime(
             JavaPlugin plugin,
             MessageFormatter messageFormatter,
+            String localServerId,
             String lobbyServerName,
             boolean useVelocityTransfer,
             ArenaLocation fallbackLobbySpawn,
@@ -58,6 +60,7 @@ public final class PlayerManager {
     ) {
         this.plugin = plugin;
         this.messageFormatter = messageFormatter;
+        this.localServerId = (localServerId == null || localServerId.isBlank()) ? "standalone" : localServerId.trim();
         updateLobbySettings(lobbyServerName, useVelocityTransfer, fallbackLobbySpawn, returningLobbyMessage);
     }
 
@@ -223,6 +226,28 @@ public final class PlayerManager {
     }
 
     /**
+     * Presunie hráča na iný server v rámci Velocity siete cez kanál BungeeCord.
+     */
+    public boolean transferToServer(Player player, String targetServer) {
+        if (player == null || !player.isOnline() || targetServer == null || targetServer.isBlank()) {
+            return false;
+        }
+        if (!useVelocityTransfer || plugin == null || !plugin.isEnabled()) {
+            return false;
+        }
+        try {
+            ByteArrayDataOutput out = ByteStreams.newDataOutput();
+            out.writeUTF("Connect");
+            out.writeUTF(targetServer.trim());
+            player.sendPluginMessage(plugin, BUNGEECORD_CHANNEL, out.toByteArray());
+            return true;
+        } catch (Exception ex) {
+            logger.warn("Presun hráča " + player.getName() + " na server '" + targetServer + "' zlyhal: " + ex.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Bezpečne vráti hráča späť do lobby cez Velocity BungeeCord kanál alebo fallback teleport.
      */
     public void returnToLobby(Player player) {
@@ -236,16 +261,8 @@ public final class PlayerManager {
             messageFormatter.send(player, returningLobbyMessage);
         }
 
-        if (useVelocityTransfer && plugin != null && plugin.isEnabled()) {
-            try {
-                ByteArrayDataOutput out = ByteStreams.newDataOutput();
-                out.writeUTF("Connect");
-                out.writeUTF(lobbyServerName);
-                player.sendPluginMessage(plugin, BUNGEECORD_CHANNEL, out.toByteArray());
-                return;
-            } catch (Exception ex) {
-                logger.warn("Presun hráča " + player.getName() + " na lobby cez Velocity zlyhal, použije sa lokálny fallback: " + ex.getMessage());
-            }
+        if (!localServerId.equalsIgnoreCase(lobbyServerName) && transferToServer(player, lobbyServerName)) {
+            return;
         }
 
         fallbackLobbySpawn.toBukkitLocation().ifPresentOrElse(

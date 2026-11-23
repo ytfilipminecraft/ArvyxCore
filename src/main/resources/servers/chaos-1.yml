@@ -1,0 +1,22 @@
+# Konfigurácia pre backend server: chaos-1 (port 25581 za Velocity proxy)
+server:
+  id: "chaos-1"
+  role: "CHAOS"
+  display-name: "Chaos #1"
+
+network:
+  proxy: "velocity"
+  lobby-server: "lobby"
+  heartbeat-interval-seconds: 10
+  server-timeout-seconds: 30
+  redis:
+    enabled: true
+    host: "127.0.0.1"
+    port: 6379
+    ssl: false
+    timeout-ms: 2000
+    password-env: "ARVYX_REDIS_PASSWORD"
+    channel-prefix: "arvyx:network"
+
+lobby:
+  use-velocity-transfer: true

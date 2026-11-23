@@ -1,5 +1,5 @@
 # ==============================================================================
-# ArvyxCore - Jazyková a vizuálna konfigurácia správ (MiniMessage)
+# ArvyxCore 1.1.0 - Jazyková a vizuálna konfigurácia správ (MiniMessage)
 # Farebná identita: tmavé pozadie, fialová (#8A2BE2), kráľovská modrá (#4169E1)
 # ==============================================================================
 
@@ -8,7 +8,7 @@ prefix: "<gradient:#8A2BE2:#4169E1>[ARVYX]</gradient>"
 general:
   no-permission: "<prefix> <#EF4444>Na vykonanie tohto príkazu nemáš dostatočné oprávnenia."
   player-only: "<prefix> <#EF4444>Tento príkaz môže použiť iba hráč."
-  unknown-subcommand: "<prefix> <#94A3B8>Neznámy príkaz. Použi <#C084FC>/arvyx <info|reload|arenas|arena|start|stop|reset|event><#94A3B8>."
+  unknown-subcommand: "<prefix> <#94A3B8>Neznámy príkaz. Použi <#C084FC>/arvyx <info|reload|join|leave|arenas|arena|start|stop|reset|event><#94A3B8>."
   reload-success: "<prefix> <#22C55E>Konfigurácia ArvyxCore bola bezpečne znova načítaná."
   reload-failed: "<prefix> <#EF4444>Pri načítaní konfigurácie nastala chyba. Skontroluj konzolu."
 
@@ -16,11 +16,12 @@ command:
   info-header: "<dark_gray><st>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</st>"
   info-title: "<prefix> <gradient:#A855F7:#60A5FA><bold>ARVYX NETWORK</bold></gradient> <#94A3B8>| <#E2E8F0>Core v<version>"
   info-details: "<#94A3B8>Server: <#C084FC><server_id> <#94A3B8>| Rola: <#60A5FA><server_role> <#94A3B8>| Arény: <#E2E8F0><arena_count> <#94A3B8>| Hráči: <#E2E8F0><player_count>"
-  info-commands: "<#94A3B8>Príkazy: <#C084FC>/arvyx <arenas|arena|start|stop|reset|event|reload>"
-  arenas-header: "<prefix> <#E2E8F0>Zoznam registrovaných arén (<#C084FC><count><#E2E8F0>):"
-  arenas-empty: "<prefix> <#94A3B8>Momentálne nie sú nakonfigurované žiadne arény."
+  info-network: "<#94A3B8>Transport: <#C084FC><transport_mode> <#94A3B8>| Online servery: <#E2E8F0><online_servers> <#94A3B8>| Vzdialené arény: <#E2E8F0><remote_arenas>"
+  info-commands: "<#94A3B8>Príkazy: <#C084FC>/arvyx <join|leave|arenas|arena|start|stop|reset|event|reload>"
+  arenas-header: "<prefix> <#E2E8F0>Zoznam registrovaných lokálnych arén (<#C084FC><count><#E2E8F0>):"
+  arenas-empty: "<prefix> <#94A3B8>Na tomto serveri nie sú registrované žiadne lokálne arény."
   arenas-entry: " <#60A5FA>▪ <#E2E8F0><id> <#94A3B8>(<type>) | Stav: <state_color><state> <#94A3B8>| Hráči: <#E2E8F0><players>/<max>"
-  arena-not-found: "<prefix> <#EF4444>Aréna s ID <#E2E8F0><id> <#EF4444>neexistuje."
+  arena-not-found: "<prefix> <#EF4444>Aréna s ID <#E2E8F0><id> <#EF4444>na tomto serveri neexistuje."
   arena-details: "<prefix> <#E2E8F0>Aréna <#C084FC><name> <#94A3B8>[<id>] | Režim: <#60A5FA><type> <#94A3B8>| Stav: <state_color><state> <#94A3B8>| Hráči: <#E2E8F0><players>/<max> <#94A3B8>(min. <min>)"
   arena-start-success: "<prefix> <#22C55E>Štart arény <#E2E8F0><id> <#22C55E>bol iniciovaný."
   arena-start-failed: "<prefix> <#EF4444>Arénu <#E2E8F0><id> <#EF4444>nie je možné spustiť: <reason>"
@@ -32,10 +33,18 @@ command:
   event-triggered: "<prefix> <#C084FC>Udalosť <#E2E8F0><event> <#C084FC>bola aktivovaná v aréne <#60A5FA><arena><#C084FC>."
   event-failed: "<prefix> <#EF4444>Nepodarilo sa aktivovať udalosť: <reason>"
 
+matchmaking:
+  join-usage: "<prefix> <#94A3B8>Použitie: <#C084FC>/arvyx join <skyrush|chaos>"
+  invalid-game-type: "<prefix> <#EF4444>Neznámy herný režim '<game>'. Použi <#C084FC>skyrush <#EF4444>alebo <#C084FC>chaos<#EF4444>."
+  no-arena-available: "<prefix> <#F59E0B>Momentálne nie je dostupná žiadna voľná aréna pre režim <#E2E8F0><type><#F59E0B>."
+  transferring-remote: "<prefix> <#60A5FA>Našli sme voľnú arénu <#C084FC><arena> <#60A5FA>na serveri <#E2E8F0><server><#60A5FA>. Presúvame ťa..."
+  not-in-arena: "<prefix> <#94A3B8>Momentálne nie si priradený v žiadnej aréne."
+  auto-countdown-started: "<prefix> <#C084FC>Dostatok hráčov! Spúšťa sa odpočítavanie štartu..."
+
 arena:
   join-success: "<prefix> <#E2E8F0>Pripojil si sa do arény <#C084FC><arena> <#94A3B8>(<players>/<max>)."
   leave-success: "<prefix> <#94A3B8>Opustil si arénu <#E2E8F0><arena><#94A3B8>."
-  already-in-arena: "<prefix> <#EF4444>Už si priradený v aréne <#E2E8F0><arena><#EF4444>. Najprv ju opusť."
+  already-in-arena: "<prefix> <#EF4444>Už si priradený v aréne <#E2E8F0><arena><#EF4444>. Najprv ju opusť príkazom /arvyx leave."
   cannot-join-state: "<prefix> <#EF4444>Do arény <#E2E8F0><arena> <#EF4444>sa teraz nedá pripojiť (Stav: <state>)."
   arena-full: "<prefix> <#EF4444>Aréna <#E2E8F0><arena> <#EF4444>je plná."
   returning-lobby: "<prefix> <#60A5FA>Presúvame ťa späť na lobby server..."

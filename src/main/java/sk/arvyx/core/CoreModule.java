@@ -2,30 +2,40 @@ package sk.arvyx.core;
 
 import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 import sk.arvyx.core.arena.Arena;
 import sk.arvyx.core.arena.ArenaManager;
+import sk.arvyx.core.arena.ArenaState;
 import sk.arvyx.core.command.ArvyxCommand;
 import sk.arvyx.core.config.ConfigManager;
 import sk.arvyx.core.countdown.CountdownManager;
 import sk.arvyx.core.game.GameManager;
 import sk.arvyx.core.game.chaos.ChaosModule;
 import sk.arvyx.core.game.skyrush.SkyRushModule;
+import sk.arvyx.core.listener.ArenaBlockListener;
 import sk.arvyx.core.listener.PlayerLifecycleListener;
+import sk.arvyx.core.matchmaking.MatchmakingManager;
 import sk.arvyx.core.network.ArenaStatusSnapshot;
-import sk.arvyx.core.network.LocalNetworkManager;
 import sk.arvyx.core.network.NetworkManager;
+import sk.arvyx.core.network.RedisConfig;
+import sk.arvyx.core.network.RedisNetworkManager;
 import sk.arvyx.core.player.PlayerManager;
+import sk.arvyx.core.reset.ArenaBlockTracker;
 import sk.arvyx.core.reset.ResetManager;
+import sk.arvyx.core.reset.WorldBackupManager;
 import sk.arvyx.core.util.Logger;
 import sk.arvyx.core.util.MessageFormatter;
 
+import java.nio.file.Path;
+import java.time.Instant;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
- * Hlavný koordinačný modul jadra ArvyxCore.
- * Zodpovedá za inicializáciu modulov, načítanie konfigurácie, registráciu listenerov, príkazov a čisté vypnutie.
+ * Hlavný koordinačný modul jadra ArvyxCore 1.1.0.
+ * Prepája konfiguráciu, sieťovú Redis Pub/Sub vrstvu, matchmaking, arény, map reset a bezpečné vypnutie.
  */
 public final class CoreModule {
 
@@ -39,7 +49,11 @@ public final class CoreModule {
     private NetworkManager networkManager;
     private CountdownManager countdownManager;
     private GameManager gameManager;
+    private MatchmakingManager matchmakingManager;
+    private ArenaBlockTracker blockTracker;
+    private WorldBackupManager worldBackupManager;
     private ResetManager resetManager;
+    private ArenaBlockListener arenaBlockListener;
     private BukkitTask heartbeatTask;
 
     public CoreModule(JavaPlugin plugin) {
@@ -55,20 +69,21 @@ public final class CoreModule {
         this.configManager.loadAll();
         this.messageFormatter = new MessageFormatter(configManager.getPrefix());
 
-        // 2. Sieťová vrstva (funguje aj bez Redis)
-        this.networkManager = new LocalNetworkManager(
+        // 2. Sieťová vrstva (Redis Pub/Sub s bezpečným fallbackom na lokálny režim)
+        RedisConfig redisConfig = configManager.getRedisConfig();
+        this.networkManager = new RedisNetworkManager(
                 logger,
                 configManager.getServerId(),
                 configManager.getServerRole(),
                 configManager.getServerDisplayName(),
-                configManager.isRedisEnabled()
+                redisConfig
         );
         this.networkManager.initialize();
 
-        // Registrácia BungeeCord/Velocity outgoing kanála pre bezpečný návrat hráčov do lobby
+        // Registrácia BungeeCord/Velocity outgoing kanála pre bezpečný presun hráčov medzi servermi
         plugin.getServer().getMessenger().registerOutgoingPluginChannel(plugin, PlayerManager.BUNGEECORD_CHANNEL);
 
-        // 3. Správa arén a hráčov
+        // 3. Správa arén (len arény priradené k tomuto server.id) a hráčov
         this.arenaManager = new ArenaManager(logger);
         loadArenasIntoManager();
 
@@ -76,6 +91,7 @@ public final class CoreModule {
         this.playerManager.attachRuntime(
                 plugin,
                 messageFormatter,
+                configManager.getServerId(),
                 configManager.getLobbyServer(),
                 configManager.isUseVelocityTransfer(),
                 configManager.getFallbackLobbySpawn(),
@@ -115,7 +131,15 @@ public final class CoreModule {
         gameManager.registerModule(skyRushModule);
         gameManager.registerModule(chaosModule);
 
-        // 6. Bezpečný reset arén
+        // 6. Bezpečný reset máp (sledovanie zmenených blokov + voliteľná obnova z overenej zálohy)
+        this.blockTracker = new ArenaBlockTracker(logger);
+        Path backupsPath = plugin.getDataFolder().toPath().resolve(configManager.getWorldBackupsDir());
+        this.worldBackupManager = new WorldBackupManager(
+                logger,
+                backupsPath,
+                configManager.isWorldBackupEnabled(),
+                configManager.isAllowWorldReplacement()
+        );
         this.resetManager = new ResetManager(
                 plugin,
                 configManager,
@@ -123,22 +147,38 @@ public final class CoreModule {
                 playerManager,
                 countdownManager,
                 networkManager,
+                blockTracker,
+                worldBackupManager,
                 logger
         );
         skyRushModule.setResetManagerSupplier(() -> this.resetManager);
         chaosModule.setResetManagerSupplier(() -> this.resetManager);
 
+        // 7. Matchmaking
+        this.matchmakingManager = new MatchmakingManager(
+                configManager.getServerId(),
+                arenaManager,
+                playerManager,
+                countdownManager,
+                gameManager,
+                networkManager,
+                logger
+        );
+        this.matchmakingManager.attachRuntime(configManager, messageFormatter);
+
         gameManager.enableAll();
 
-        // 7. Registrácia listenerov a príkazov
+        // 8. Registrácia listenerov a príkazov
         registerListeners();
         registerCommands();
 
-        // 8. Spustenie sieťového heartbeat schedulera
+        // 9. Spustenie sieťového heartbeat schedulera a detekcie nedostupných serverov
         startHeartbeatScheduler();
 
-        logger.info("ArvyxCore úspešne inicializovaný (server=" + configManager.getServerId()
-                + ", arén=" + arenaManager.getArenaCount() + ").");
+        logger.info("ArvyxCore v" + getPluginVersion() + " úspešne inicializovaný (server="
+                + configManager.getServerId()
+                + ", transport=" + networkManager.getTransportMode()
+                + ", lokálnych arén=" + arenaManager.getArenaCount() + ").");
     }
 
     public void reloadConfiguration() {
@@ -156,12 +196,21 @@ public final class CoreModule {
                 configManager.getMessage("countdown.started"),
                 configManager.getMessage("countdown.cancelled-low-players")
         );
+        if (worldBackupManager != null) {
+            worldBackupManager.updateSettings(
+                    configManager.isWorldBackupEnabled(),
+                    configManager.isAllowWorldReplacement()
+            );
+        }
+        if (arenaBlockListener != null) {
+            arenaBlockListener.setTrackModifiedBlocks(configManager.isRestoreModifiedBlocksOnReset());
+        }
         gameManager.reloadAll();
         logger.info("Konfigurácia všetkých modulov bola bezpečne znova načítaná.");
     }
 
     public void shutdown() {
-        logger.info("Vypínanie modulov ArvyxCore...");
+        logger.info("Vypínanie modulov ArvyxCore (bezpečné ošetrenie aktívnych zápasov)...");
         if (heartbeatTask != null) {
             heartbeatTask.cancel();
             heartbeatTask = null;
@@ -172,8 +221,46 @@ public final class CoreModule {
         if (resetManager != null) {
             resetManager.cancelAllPendingResets();
         }
+
+        // Ošetrenie prebiehajúcich zápasov pri reštarte/vypnutí backend servera
+        if (arenaManager != null && gameManager != null && playerManager != null) {
+            for (Arena arena : arenaManager.getAllArenas()) {
+                ArenaState state = arena.getState();
+                if (state == ArenaState.STARTING || state == ArenaState.INGAME) {
+                    gameManager.stopGame(arena);
+                    for (UUID uuid : arena.getPlayers()) {
+                        Player player = Bukkit.getPlayer(uuid);
+                        if (player != null && player.isOnline()) {
+                            playerManager.restoreCleanPlayerState(player);
+                            playerManager.returnToLobby(player);
+                        }
+                    }
+                    if (blockTracker != null && configManager.isRestoreModifiedBlocksOnReset()) {
+                        blockTracker.restoreArenaBlocks(arena);
+                    }
+                    arena.clearSessionData();
+                    if (arena.transitionTo(ArenaState.ENDING)) {
+                        arena.transitionTo(ArenaState.DISABLED);
+                    } else {
+                        arena.transitionTo(ArenaState.DISABLED);
+                    }
+                    if (networkManager != null) {
+                        networkManager.publishArenaStatus(
+                                ArenaStatusSnapshot.fromArena(configManager.getServerId(), arena)
+                        );
+                    }
+                }
+            }
+        }
+
         if (gameManager != null) {
             gameManager.disableAll();
+        }
+        if (blockTracker != null) {
+            blockTracker.clearAll();
+        }
+        if (worldBackupManager != null) {
+            worldBackupManager.shutdown();
         }
         if (arenaManager != null) {
             arenaManager.clearArenas();
@@ -211,6 +298,12 @@ public final class CoreModule {
                 ),
                 plugin
         );
+        this.arenaBlockListener = new ArenaBlockListener(
+                arenaManager,
+                blockTracker,
+                configManager.isRestoreModifiedBlocksOnReset()
+        );
+        plugin.getServer().getPluginManager().registerEvents(arenaBlockListener, plugin);
     }
 
     private void registerCommands() {
@@ -224,6 +317,7 @@ public final class CoreModule {
                 configManager,
                 arenaManager,
                 playerManager,
+                matchmakingManager,
                 gameManager,
                 countdownManager,
                 resetManager,
@@ -238,6 +332,7 @@ public final class CoreModule {
         long periodTicks = configManager.getHeartbeatIntervalSeconds() * 20L;
         this.heartbeatTask = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
             networkManager.updateLocalHeartbeat(Bukkit.getOnlinePlayers().size());
+            networkManager.detectUnavailableServers(Instant.now());
             for (Arena arena : arenaManager.getAllArenas()) {
                 networkManager.publishArenaStatus(ArenaStatusSnapshot.fromArena(configManager.getServerId(), arena));
             }
@@ -268,6 +363,10 @@ public final class CoreModule {
         return playerManager;
     }
 
+    public MatchmakingManager getMatchmakingManager() {
+        return matchmakingManager;
+    }
+
     public NetworkManager getNetworkManager() {
         return networkManager;
     }
@@ -282,5 +381,13 @@ public final class CoreModule {
 
     public ResetManager getResetManager() {
         return resetManager;
+    }
+
+    public ArenaBlockTracker getBlockTracker() {
+        return blockTracker;
+    }
+
+    public WorldBackupManager getWorldBackupManager() {
+        return worldBackupManager;
     }
 }

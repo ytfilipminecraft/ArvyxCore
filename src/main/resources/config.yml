@@ -1,10 +1,11 @@
 # ==============================================================================
-# ArvyxCore - Hlavná konfigurácia siete ARVYX NETWORK
-# DÔLEŽITÉ: Nikdy sem neukladajte heslá, tokeny ani Velocity forwarding secret.
+# ArvyxCore 1.1.0 - Hlavná konfigurácia siete ARVYX NETWORK
+# DÔLEŽITÉ: Heslá k Redis zadávajte cez premennú prostredia (ARVYX_REDIS_PASSWORD).
+# Nikdy sem neukladajte Velocity forwarding secret ani privátne tokeny.
 # ==============================================================================
 
 server:
-  # Identifikátor tohto backend servera v sieti (napr. lobby, skyrush-1, chaos-1)
+  # Jedinečný identifikátor tohto servera: lobby, skyrush-1, skyrush-2, skyrush-3, chaos-1, chaos-2
   id: "skyrush-1"
   # Rola servera: LOBBY, SKYRUSH, CHAOS, STANDALONE
   role: "SKYRUSH"
@@ -16,11 +17,19 @@ network:
   proxy: "velocity"
   # Cieľový lobby server v rámci Velocity siete pre bezpečný návrat hráčov
   lobby-server: "lobby"
-  # Interval odosielania stavových aktualizácií medzi modulmi (v sekundách)
-  heartbeat-interval-seconds: 15
-  # Príprava na budúcu Redis integráciu (plugin funguje plne aj bez Redis)
+  # Interval odosielania heartbeatu a stavu arén (v sekundách)
+  heartbeat-interval-seconds: 10
+  # Po koľkých sekundách bez heartbeatu sa vzdialený server označí ako nedostupný
+  server-timeout-seconds: 30
+  # Skutočná Redis Pub/Sub komunikácia medzi lobby a backend servermi
   redis:
     enabled: false
+    host: "127.0.0.1"
+    port: 6379
+    ssl: false
+    timeout-ms: 2000
+    # Názov environment premennej obsahujúcej Redis heslo (prázdne = bez hesla)
+    password-env: "ARVYX_REDIS_PASSWORD"
     channel-prefix: "arvyx:network"
 
 lobby:
@@ -56,6 +65,13 @@ reset:
   restore-player-state: true
   # Odstrániť dočasné herné entity (položené predmety, TNT, šípy)
   clear-temporary-entities: true
+  # Obnoviť bloky zmenené hráčmi alebo explóziami počas zápasu
+  restore-modified-blocks: true
+  # Voliteľná obnova celého sveta zo záložnej šablóny (nikdy nemaže originálny svet bez existujúcej zálohy a povolenia)
+  world-backup:
+    enabled: false
+    allow-world-replacement: false
+    backups-dir: "backups"
 
 logging:
   debug: false

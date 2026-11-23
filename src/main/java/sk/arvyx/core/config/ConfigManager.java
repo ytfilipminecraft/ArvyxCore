@@ -8,6 +8,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import sk.arvyx.core.arena.Arena;
 import sk.arvyx.core.arena.ArenaLocation;
 import sk.arvyx.core.arena.ArenaType;
+import sk.arvyx.core.network.RedisConfig;
 import sk.arvyx.core.util.Logger;
 
 import java.io.File;
@@ -20,7 +21,8 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Centralizovaná správa a validácia všetkých YAML konfigurácií pluginu ArvyxCore.
+ * Centralizovaná správa a validácia všetkých YAML konfigurácií pluginu ArvyxCore 1.1.0.
+ * Načítava iba arény priradené ku konkrétnemu server.id.
  */
 public final class ConfigManager {
 
@@ -103,18 +105,43 @@ public final class ConfigManager {
         }
     }
 
+    /**
+     * Čisté pravidlo vlastníctva arény: aréna patrí len na server so zhodným server.id.
+     */
+    public static boolean shouldLoadArenaForServer(String arenaServerId, String localServerId) {
+        if (arenaServerId == null || arenaServerId.isBlank() || localServerId == null || localServerId.isBlank()) {
+            return false;
+        }
+        return arenaServerId.trim().equalsIgnoreCase(localServerId.trim());
+    }
+
     public List<Arena> loadConfiguredArenas() {
+        String localServerId = getServerId();
         ConfigurationSection section = arenasConfig.getConfigurationSection("arenas");
         if (section == null) {
             logger.warn("Sekcia 'arenas' v arenas.yml chýba.");
             return List.of();
         }
         List<Arena> result = new ArrayList<>();
+        int skippedOtherServers = 0;
+
         for (String arenaId : section.getKeys(false)) {
             ConfigurationSection arenaSec = section.getConfigurationSection(arenaId);
             if (arenaSec == null) {
                 continue;
             }
+            String ownerServer = arenaSec.getString("server", "");
+            if (ownerServer == null || ownerServer.isBlank()) {
+                logger.warn("Aréna '" + arenaId + "' nemá definované pole 'server' v arenas.yml — preskočená.");
+                continue;
+            }
+            if (!shouldLoadArenaForServer(ownerServer, localServerId)) {
+                skippedOtherServers++;
+                logger.debug("Aréna '" + arenaId + "' patrí serveru '" + ownerServer
+                        + "' (lokálny server='" + localServerId + "') — preskočená.");
+                continue;
+            }
+
             try {
                 String name = arenaSec.getString("name", arenaId);
                 String typeRaw = arenaSec.getString("type", "");
@@ -164,6 +191,9 @@ public final class ConfigManager {
                 logger.error("Chyba pri načítaní arény '" + arenaId + "' z arenas.yml: " + ex.getMessage());
             }
         }
+
+        logger.info("Pre server '" + localServerId + "' načítaných " + result.size()
+                + " lokálnych arén (preskočených pre iné servery: " + skippedOtherServers + ").");
         return Collections.unmodifiableList(result);
     }
 
@@ -230,11 +260,30 @@ public final class ConfigManager {
     }
 
     public int getHeartbeatIntervalSeconds() {
-        return Math.max(5, config.getInt("network.heartbeat-interval-seconds", 15));
+        return Math.max(3, config.getInt("network.heartbeat-interval-seconds", 10));
+    }
+
+    public int getServerTimeoutSeconds() {
+        return Math.max(10, config.getInt("network.server-timeout-seconds", 30));
     }
 
     public boolean isRedisEnabled() {
         return config.getBoolean("network.redis.enabled", false);
+    }
+
+    public RedisConfig getRedisConfig() {
+        String envVar = config.getString("network.redis.password-env", "ARVYX_REDIS_PASSWORD");
+        String password = (envVar != null && !envVar.isBlank()) ? System.getenv(envVar) : "";
+        return new RedisConfig(
+                isRedisEnabled(),
+                config.getString("network.redis.host", "127.0.0.1"),
+                config.getInt("network.redis.port", 6379),
+                config.getBoolean("network.redis.ssl", false),
+                config.getInt("network.redis.timeout-ms", 2000),
+                password,
+                config.getString("network.redis.channel-prefix", "arvyx:network"),
+                getServerTimeoutSeconds()
+        );
     }
 
     public boolean isUseVelocityTransfer() {
@@ -279,6 +328,23 @@ public final class ConfigManager {
 
     public boolean isClearTemporaryEntitiesOnReset() {
         return config.getBoolean("reset.clear-temporary-entities", true);
+    }
+
+    public boolean isRestoreModifiedBlocksOnReset() {
+        return config.getBoolean("reset.restore-modified-blocks", true);
+    }
+
+    public boolean isWorldBackupEnabled() {
+        return config.getBoolean("reset.world-backup.enabled", false);
+    }
+
+    public boolean isAllowWorldReplacement() {
+        return config.getBoolean("reset.world-backup.allow-world-replacement", false);
+    }
+
+    public String getWorldBackupsDir() {
+        String dir = config.getString("reset.world-backup.backups-dir", "backups");
+        return (dir == null || dir.isBlank()) ? "backups" : dir.trim();
     }
 
     public boolean isDebugLogging() {

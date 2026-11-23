@@ -4,6 +4,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
+import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import sk.arvyx.core.CoreModule;
@@ -16,8 +17,10 @@ import sk.arvyx.core.countdown.CountdownManager;
 import sk.arvyx.core.game.GameManager;
 import sk.arvyx.core.game.chaos.ChaosEventManager;
 import sk.arvyx.core.game.chaos.ChaosModule;
+import sk.arvyx.core.matchmaking.MatchmakingManager;
 import sk.arvyx.core.network.ArenaStatusSnapshot;
 import sk.arvyx.core.network.NetworkManager;
+import sk.arvyx.core.network.ServerInfo;
 import sk.arvyx.core.player.PlayerManager;
 import sk.arvyx.core.reset.ResetManager;
 import sk.arvyx.core.util.MessageFormatter;
@@ -30,7 +33,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Hlavný správca príkazu /arvyx s kontrolou oprávnení a tab-kompleciou.
+ * Hlavný správca príkazu /arvyx vrátane matchmakingu (/arvyx join, /arvyx leave) a administrácie.
  */
 public final class ArvyxCommand implements CommandExecutor, TabCompleter {
 
@@ -38,6 +41,7 @@ public final class ArvyxCommand implements CommandExecutor, TabCompleter {
     private final ConfigManager configManager;
     private final ArenaManager arenaManager;
     private final PlayerManager playerManager;
+    private final MatchmakingManager matchmakingManager;
     private final GameManager gameManager;
     private final CountdownManager countdownManager;
     private final ResetManager resetManager;
@@ -49,6 +53,7 @@ public final class ArvyxCommand implements CommandExecutor, TabCompleter {
             ConfigManager configManager,
             ArenaManager arenaManager,
             PlayerManager playerManager,
+            MatchmakingManager matchmakingManager,
             GameManager gameManager,
             CountdownManager countdownManager,
             ResetManager resetManager,
@@ -59,6 +64,7 @@ public final class ArvyxCommand implements CommandExecutor, TabCompleter {
         this.configManager = configManager;
         this.arenaManager = arenaManager;
         this.playerManager = playerManager;
+        this.matchmakingManager = matchmakingManager;
         this.gameManager = gameManager;
         this.countdownManager = countdownManager;
         this.resetManager = resetManager;
@@ -84,6 +90,8 @@ public final class ArvyxCommand implements CommandExecutor, TabCompleter {
 
         String sub = args[0].toLowerCase(Locale.ROOT);
         switch (sub) {
+            case "join" -> handleJoin(sender, args);
+            case "leave" -> handleLeave(sender);
             case "reload" -> handleReload(sender);
             case "arenas" -> handleArenas(sender);
             case "arena" -> handleArenaDetails(sender, args);
@@ -96,7 +104,45 @@ public final class ArvyxCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
+    private void handleJoin(CommandSender sender, String[] args) {
+        if (!hasPermission(sender, "arvyx.join")) {
+            formatter.send(sender, configManager.getMessage("general.no-permission"));
+            return;
+        }
+        if (!(sender instanceof Player player)) {
+            formatter.send(sender, configManager.getMessage("general.player-only"));
+            return;
+        }
+        if (args.length < 2) {
+            formatter.send(sender, configManager.getMessage("matchmaking.join-usage"));
+            return;
+        }
+        Optional<ArenaType> typeOpt = ArenaType.fromString(args[1]);
+        if (typeOpt.isEmpty()) {
+            formatter.send(sender, configManager.getMessage("matchmaking.invalid-game-type"), Map.of("game", args[1]));
+            return;
+        }
+        matchmakingManager.joinPlayer(player, typeOpt.get());
+    }
+
+    private void handleLeave(CommandSender sender) {
+        if (!hasPermission(sender, "arvyx.leave")) {
+            formatter.send(sender, configManager.getMessage("general.no-permission"));
+            return;
+        }
+        if (!(sender instanceof Player player)) {
+            formatter.send(sender, configManager.getMessage("general.player-only"));
+            return;
+        }
+        matchmakingManager.leavePlayer(player);
+    }
+
     private void sendInfo(CommandSender sender) {
+        long onlineServers = networkManager.getRegisteredServers().stream().filter(ServerInfo::online).count();
+        long remoteArenas = networkManager.getArenaSnapshots().stream()
+                .filter(s -> !s.serverId().equalsIgnoreCase(configManager.getServerId()))
+                .count();
+
         formatter.send(sender, configManager.getMessage("command.info-header"));
         formatter.send(sender, configManager.getMessage("command.info-title"), Map.of(
                 "version", coreModule.getPluginVersion()
@@ -106,6 +152,11 @@ public final class ArvyxCommand implements CommandExecutor, TabCompleter {
                 "server_role", configManager.getServerRole(),
                 "arena_count", String.valueOf(arenaManager.getArenaCount()),
                 "player_count", String.valueOf(playerManager.getTrackedPlayerCount())
+        ));
+        formatter.send(sender, configManager.getMessage("command.info-network"), Map.of(
+                "transport_mode", networkManager.getTransportMode().getDescription(),
+                "online_servers", String.valueOf(onlineServers),
+                "remote_arenas", String.valueOf(remoteArenas)
         ));
         formatter.send(sender, configManager.getMessage("command.info-commands"));
         formatter.send(sender, configManager.getMessage("command.info-header"));
@@ -289,7 +340,7 @@ public final class ArvyxCommand implements CommandExecutor, TabCompleter {
         } else {
             formatter.send(sender, configManager.getMessage("command.arena-reset-failed"), Map.of(
                     "id", arena.getId(),
-                    "reason", "Nepovolený prechod zo stavu " + arena.getState().name()
+                    "reason", "Reset už prebieha alebo je neplatný prechod zo stavu " + arena.getState().name()
             ));
         }
     }
@@ -365,11 +416,14 @@ public final class ArvyxCommand implements CommandExecutor, TabCompleter {
             @NotNull String[] args
     ) {
         if (args.length == 1) {
-            List<String> subs = List.of("info", "reload", "arenas", "arena", "start", "stop", "reset", "event");
+            List<String> subs = List.of("join", "leave", "info", "reload", "arenas", "arena", "start", "stop", "reset", "event");
             return filterPrefix(subs, args[0]);
         }
         if (args.length == 2) {
             String sub = args[0].toLowerCase(Locale.ROOT);
+            if ("join".equals(sub)) {
+                return filterPrefix(List.of("skyrush", "chaos"), args[1]);
+            }
             if (List.of("arena", "start", "stop", "reset", "event").contains(sub)) {
                 List<String> ids = arenaManager.getAllArenas().stream()
                         .filter(a -> !"event".equals(sub) || a.getType() == ArenaType.CHAOS)

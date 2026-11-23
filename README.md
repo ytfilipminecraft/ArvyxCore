@@ -1,35 +1,39 @@
-# ArvyxCore (ARVYX NETWORK)
+# ArvyxCore 1.1.0 (ARVYX NETWORK)
 
 **ArvyxCore** je modulárny, bezpečnostne orientovaný základný Minecraft Paper plugin pre sieť **ARVYX NETWORK**, navrhnutý pre **Paper 26.3**, **Java 25** a **Gradle Kotlin DSL**.
 
 ---
 
-## 1. Architektúra siete a rola pluginu
+## 1. Architektúra siete a konfigurácia serverov
 
-Sieť ARVYX NETWORK pozostáva z proxy **Velocity (`25565`)** a backend serverov:
+Sieť ARVYX NETWORK pozostáva z proxy **Velocity (`25565`)** a šiestich backend serverov:
 
-- `lobby` (`25566`)
-- `skyrush-1` (`25571`), `skyrush-2` (`25572`), `skyrush-3` (`25573`)
-- `chaos-1` (`25581`), `chaos-2` (`25582`)
+- `lobby` (`25566`) — šablóna v `servers/lobby.yml`
+- `skyrush-1` (`25571`) — šablóna v `servers/skyrush-1.yml`
+- `skyrush-2` (`25572`) — šablóna v `servers/skyrush-2.yml`
+- `skyrush-3` (`25573`) — šablóna v `servers/skyrush-3.yml`
+- `chaos-1` (`25581`) — šablóna v `servers/chaos-1.yml`
+- `chaos-2` (`25582`) — šablóna v `servers/chaos-2.yml`
 
-Bezpečnostné zásady:
+Každá aréna v `arenas.yml` je viazaná poľom `server` na konkrétny `server.id` a zaregistruje sa **iba** na serveri, ktorému patrí.
+
+### Bezpečnostné zásady
 - Plugin **nemení** konfiguráciu Velocity, forwarding secret ani autentifikáciu.
-- Plugin **neotvára** backend porty na verejný internet ani nespúšťa systémové príkazy.
-- Presun hráčov na lobby prebieha cez štandardný Velocity/BungeeCord plugin messaging kanál (`BungeeCord` `Connect`) s bezpečným lokálnym fallback teleportom.
+- Redis heslo sa nikdy neukladá natvrdo — načítava sa z premennej prostredia `ARVYX_REDIS_PASSWORD`.
+- Sieťové správy používajú bezpečnú JSON serializáciu (žiadna Java `ObjectInputStream` deserializácia).
 
 ---
 
-## 2. Moduly pluginu
+## 2. Novinky vo verzii 1.1.0
 
-- **`CoreModule`** (`sk.arvyx.core.CoreModule`) — inicializácia, správa modulov, konfigurácie, listenerov, príkazov a čisté vypnutie schedulerov.
-- **`ArenaManager`** (`sk.arvyx.core.arena`) — registrácia arén a prísne riadený stavový automat (`DISABLED`, `WAITING`, `STARTING`, `INGAME`, `ENDING`, `RESETTING`).
-- **`GameManager`** (`sk.arvyx.core.game`) — izolovaný register herných režimov:
-  - **SkyRush** (`sk.arvyx.core.game.skyrush`) — rýchly ostrovný mód (3–5 minút), štartovací kit, loot truhlice, Supply Drop na strede, automatické vyhodnotenie víťaza.
-  - **Chaos** (`sk.arvyx.core.game.chaos`) — streamovací mód s oddelenými triedami udalostí (`LOW_GRAVITY`, `KNOCKBACK_STICK`, `TNT_RAIN`, `SPEED_BOOST`, `CHAOS_FOG`), cooldownmi a pripraveným rozhraním `StreamEventBridge`.
-- **`PlayerManager`** (`sk.arvyx.core.player`) — sledovanie hráčov cez `UUID`, ochrana pred duplicitným priradením do viacerých arén, bezpečný návrat na lobby.
-- **`CountdownManager`** (`sk.arvyx.core.countdown`) — odpočítavanie so zvukovými efektmi, upozorneniami a automatickým zrušením pri poklese hráčov pod minimum.
-- **`ResetManager`** (`sk.arvyx.core.reset`) — bezpečné čistenie dočasných entít, inventára, efektov a herných nastavení bez nebezpečného mazania priečinkov svetov.
-- **`NetworkManager`** (`sk.arvyx.core.network`) — sieťová abstrakcia pripravená na budúcu integráciu Redis / externého API (plne funkčná aj v lokálnom režime bez Redis).
+- **Matchmaking (`MatchmakingManager`):**
+  - `/arvyx join skyrush` a `/arvyx join chaos` vyberajú najlepšiu voľnú lokálnu arénu (alebo presunú hráča cez Velocity na najvhodnejší online backend server), skontrolujú kapacitu a stav, zabránia duplicitnému priradeniu, teleportujú hráča na lobby arény a po dosiahnutí `min-players` automaticky spustia odpočítavanie.
+  - `/arvyx leave` bezpečne odstráni hráča z arény, vyhodnotí prípadné ukončenie zápasu alebo zrušenie odpočítavania a vráti hráča na lobby.
+- **Skutočná sieťová komunikácia (`RedisNetworkManager`):**
+  - Asynchrónny Redis Pub/Sub na troch kanáloch (`servers`, `arenas`, `messages`), periodický heartbeat, detekcia nedostupných serverov po timeout-e a automatický bezpečný fallback do lokálneho režimu pri výpadku Redis.
+- **Bezpečný reset SkyRush máp (`ArenaBlockTracker`, `WorldBackupManager`, `ResetManager`):**
+  - Dvojitá ochrana proti súbežnému resetu (`activeResets`), obnova zmenených blokov a dočasných stavieb, doplnenie loot truhlíc, čistenie dočasných entít a voliteľná asynchrónna obnova sveta z overenej zálohy.
+  - Bezpečné ošetrenie aktívnych zápasov pri vypnutí/reštarte backend servera.
 
 ---
 
@@ -37,9 +41,11 @@ Bezpečnostné zásady:
 
 | Príkaz | Popis | Oprávnenie |
 |---|---|---|
-| `/arvyx` alebo `/arvyx info` | Informácie o plugine a serveri | `arvyx.admin` |
+| `/arvyx join <skyrush\|chaos>` | Pripojenie do voľnej arény | `arvyx.join` (default: true) |
+| `/arvyx leave` | Opustenie arény a návrat na lobby | `arvyx.leave` (default: true) |
+| `/arvyx` alebo `/arvyx info` | Informácie o plugine, sieti a transporte | `arvyx.admin` |
 | `/arvyx reload` | Bezpečné znovunačítanie YAML konfigurácií | `arvyx.reload` |
-| `/arvyx arenas` | Zoznam arén a ich stavov | `arvyx.arena` |
+| `/arvyx arenas` | Zoznam lokálnych arén servera | `arvyx.arena` |
 | `/arvyx arena <id>` | Podrobnosti konkrétnej arény | `arvyx.arena` |
 | `/arvyx start <id>` | Manuálne spustenie arény | `arvyx.start` |
 | `/arvyx stop <id>` | Bezpečné zastavenie arény | `arvyx.stop` |
@@ -48,28 +54,27 @@ Bezpečnostné zásady:
 
 ---
 
-## 4. Požiadavky a kompilácia
+## 4. Kompilácia a inštalácia
 
+### Požiadavky
 - **Java:** JDK 25
-- **Minecraft Server:** Paper 26.3
-- **Build:** Gradle Wrapper (`./gradlew`)
+- **Server:** Paper 26.3
+- **Voliteľne:** Redis server (pre synchronizáciu medzi 6 backend/lobby servermi)
 
-### Zostavenie projektu a spustenie testov
+### Zostavenie projektu a testov
 
 ```bash
 ./gradlew clean build
 ```
 
-Po úspešnom zostavení sa výsledný plugin nachádza v:
+Výsledný self-contained plugin (vrátane relokovaného Redis klienta) sa nachádza v:
 
 ```text
-build/libs/ArvyxCore-1.0.0.jar
+build/libs/ArvyxCore-1.1.0.jar
 ```
 
-### Inštalácia na Paper server
-
-1. Skopírujte `build/libs/ArvyxCore-1.0.0.jar` do priečinka `plugins/` na príslušnom backend serveri (`skyrush-1`, `chaos-1`, atď.).
-2. Spustite alebo reštartujte Paper server (vygenerujú sa súbory `config.yml`, `arenas.yml`, `messages.yml`, `games/skyrush.yml`, `games/chaos.yml`).
-3. V `plugins/ArvyxCore/config.yml` nastavte `server.id`, `server.role` a `network.lobby-server`.
-4. V `plugins/ArvyxCore/arenas.yml` nastavte názvy načítaných svetov a súradnice arén.
-5. Konfiguráciu načítajte príkazom `/arvyx reload`.
+### Nasadenie na sieť
+1. Nahrajte `build/libs/ArvyxCore-1.1.0.jar` do priečinka `plugins/` na všetkých 6 serveroch (`lobby`, `skyrush-1..3`, `chaos-1..2`).
+2. Pre každý server nastavte príslušnú konfiguráciu podľa šablón v `src/main/resources/servers/<server-id>.yml`.
+3. Ak používate Redis s heslom, nastavte systémovú premennú `ARVYX_REDIS_PASSWORD` pred spustením Paper servera.
+4. Na každom backend serveri sa automaticky zaregistrujú iba arény z `arenas.yml`, ktorých `server` zodpovedá jeho `server.id`.

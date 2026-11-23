@@ -1,11 +1,12 @@
 # ==============================================================================
-# ArvyxCore - Konfigurácia arén
-# Názvy svetov a súradnice sú plne konfigurovateľné pre každý server siete.
+# ArvyxCore 1.1.0 - Konfigurácia arén viazaná na konkrétny server.id
+# Každá aréna sa zaregistruje IBA na serveri, ktorého server.id sa zhoduje s poľom 'server'.
 # ==============================================================================
 
 arenas:
-  skyrush-a1:
-    name: "SkyRush - Nebeské Ostrovy"
+  skyrush-1a:
+    server: "skyrush-1"
+    name: "SkyRush #1 - Nebeské Ostrovy"
     type: "SKYRUSH"
     enabled: true
     world: "skyrush_arena_1"
@@ -65,11 +66,138 @@ arenas:
         yaw: -45.0
         pitch: 0.0
 
-  chaos-a1:
-    name: "Chaos - Stream Aréna"
+  skyrush-2a:
+    server: "skyrush-2"
+    name: "SkyRush #2 - Kryštálové Útesy"
+    type: "SKYRUSH"
+    enabled: true
+    world: "skyrush_arena_2"
+    min-players: 2
+    max-players: 8
+    countdown-seconds: 10
+    match-duration-seconds: 240
+    lobby-spawn:
+      x: 0.5
+      y: 90.0
+      z: 0.5
+      yaw: 0.0
+      pitch: 0.0
+    center:
+      x: 0.5
+      y: 66.0
+      z: 0.5
+    spawns:
+      - x: 40.5
+        y: 65.0
+        z: 0.5
+        yaw: 90.0
+        pitch: 0.0
+      - x: -39.5
+        y: 65.0
+        z: 0.5
+        yaw: -90.0
+        pitch: 0.0
+      - x: 0.5
+        y: 65.0
+        z: 40.5
+        yaw: 180.0
+        pitch: 0.0
+      - x: 0.5
+        y: 65.0
+        z: -39.5
+        yaw: 0.0
+        pitch: 0.0
+
+  skyrush-3a:
+    server: "skyrush-3"
+    name: "SkyRush #3 - Hviezdny Chrbát"
+    type: "SKYRUSH"
+    enabled: true
+    world: "skyrush_arena_3"
+    min-players: 2
+    max-players: 8
+    countdown-seconds: 10
+    match-duration-seconds: 240
+    lobby-spawn:
+      x: 0.5
+      y: 90.0
+      z: 0.5
+      yaw: 0.0
+      pitch: 0.0
+    center:
+      x: 0.5
+      y: 66.0
+      z: 0.5
+    spawns:
+      - x: 40.5
+        y: 65.0
+        z: 0.5
+        yaw: 90.0
+        pitch: 0.0
+      - x: -39.5
+        y: 65.0
+        z: 0.5
+        yaw: -90.0
+        pitch: 0.0
+      - x: 0.5
+        y: 65.0
+        z: 40.5
+        yaw: 180.0
+        pitch: 0.0
+      - x: 0.5
+        y: 65.0
+        z: -39.5
+        yaw: 0.0
+        pitch: 0.0
+
+  chaos-1a:
+    server: "chaos-1"
+    name: "Chaos #1 - Stream Aréna"
     type: "CHAOS"
     enabled: true
     world: "chaos_arena_1"
+    min-players: 2
+    max-players: 16
+    countdown-seconds: 15
+    match-duration-seconds: 300
+    lobby-spawn:
+      x: 0.5
+      y: 80.0
+      z: 0.5
+      yaw: 0.0
+      pitch: 0.0
+    center:
+      x: 0.5
+      y: 65.0
+      z: 0.5
+    spawns:
+      - x: 18.5
+        y: 65.0
+        z: 0.5
+        yaw: 90.0
+        pitch: 0.0
+      - x: -17.5
+        y: 65.0
+        z: 0.5
+        yaw: -90.0
+        pitch: 0.0
+      - x: 0.5
+        y: 65.0
+        z: 18.5
+        yaw: 180.0
+        pitch: 0.0
+      - x: 0.5
+        y: 65.0
+        z: -17.5
+        yaw: 0.0
+        pitch: 0.0
+
+  chaos-2a:
+    server: "chaos-2"
+    name: "Chaos #2 - Divácka Aréna"
+    type: "CHAOS"
+    enabled: true
+    world: "chaos_arena_2"
     min-players: 2
     max-players: 16
     countdown-seconds: 15

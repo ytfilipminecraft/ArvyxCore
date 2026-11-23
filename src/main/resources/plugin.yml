@@ -9,8 +9,8 @@ website: https://arvyx.sk
 
 commands:
   arvyx:
-    description: Hlavný správcovský príkaz siete ARVYX NETWORK.
-    usage: /arvyx <info|reload|arenas|arena|start|stop|reset|event>
+    description: Hlavný správcovský a matchmaking príkaz siete ARVYX NETWORK.
+    usage: /arvyx <info|reload|join|leave|arenas|arena|start|stop|reset|event>
     aliases:
       - ac
       - arvyxcore
@@ -26,6 +26,14 @@ permissions:
       arvyx.stop: true
       arvyx.reset: true
       arvyx.event: true
+      arvyx.join: true
+      arvyx.leave: true
+  arvyx.join:
+    description: Umožňuje hráčovi pripojiť sa do arény cez matchmaking (/arvyx join).
+    default: true
+  arvyx.leave:
+    description: Umožňuje hráčovi opustiť arénu (/arvyx leave).
+    default: true
   arvyx.reload:
     description: Umožňuje znova načítať konfiguráciu pluginu.
     default: op
