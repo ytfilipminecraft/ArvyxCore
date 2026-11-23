@@ -53,8 +53,14 @@ public final class ConfigManager {
                 && selectedServerId.matches("[a-zA-Z0-9_-]+")) {
             String serverConfigPath = "servers/" + selectedServerId.toLowerCase(java.util.Locale.ROOT) + ".yml";
             File serverConfigFile = new File(plugin.getDataFolder(), serverConfigPath);
-            if (!serverConfigFile.exists() && plugin.getResource(serverConfigPath) != null) {
-                saveResourceIfMissing(serverConfigPath);
+            if (!serverConfigFile.exists()) {
+                try (InputStream bundled = plugin.getResource(serverConfigPath)) {
+                    if (bundled != null) {
+                        saveResourceIfMissing(serverConfigPath);
+                    }
+                } catch (Exception ex) {
+                    logger.warn("Nepodarilo sa pripraviť konfiguráciu servera " + serverConfigPath + ": " + ex.getMessage());
+                }
             }
             if (serverConfigFile.isFile()) {
                 YamlConfiguration serverOverrides = YamlConfiguration.loadConfiguration(serverConfigFile);
@@ -315,7 +321,7 @@ public final class ConfigManager {
     }
 
     public boolean isRedisEnabled() {
-        return config.getBoolean("network.redis.enabled", false);
+        return environmentBooleanOrConfig("ARVYX_REDIS_ENABLED", "network.redis.enabled", false);
     }
 
     public RedisConfig getRedisConfig() {
