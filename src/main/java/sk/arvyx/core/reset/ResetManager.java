@@ -174,9 +174,17 @@ public final class ResetManager {
             if (worldBackupManager.canSafelyReplaceWorld(arena.getWorldName()) && plugin.isEnabled()) {
                 blockTracker.clearArena(arena.getId());
                 asyncBackupRestoreDispatched = true;
-                worldBackupManager.restoreWorldFromBackup(plugin, arena.getWorldName(), () -> {
+                worldBackupManager.restoreWorldFromBackup(plugin, arena.getWorldName(), success -> {
                     try {
-                        finalizeArenaReset(arena);
+                        if (success) {
+                            finalizeArenaReset(arena);
+                        } else {
+                            logger.error("Reset arény '" + arena.getId()
+                                    + "' zlyhal pri obnove sveta; aréna zostáva v stave RESETTING.");
+                            networkManager.publishArenaStatus(
+                                    ArenaStatusSnapshot.fromArena(configManager.getServerId(), arena)
+                            );
+                        }
                     } finally {
                         activeResets.remove(key);
                     }
@@ -185,7 +193,24 @@ public final class ResetManager {
             }
 
             if (configManager.isRestoreModifiedBlocksOnReset()) {
-                blockTracker.restoreArenaBlocks(arena);
+                try {
+                    int expected = blockTracker.getTrackedBlockCount(arena.getId());
+                    int restored = blockTracker.restoreArenaBlocks(arena);
+                    if (restored != expected) {
+                        logger.error("Reset arény '" + arena.getId() + "' obnovil iba " + restored
+                                + " z " + expected + " blokov; aréna zostáva v stave RESETTING.");
+                        networkManager.publishArenaStatus(
+                                ArenaStatusSnapshot.fromArena(configManager.getServerId(), arena)
+                        );
+                        return false;
+                    }
+                } catch (RuntimeException ex) {
+                    logger.error("Reset arény '" + arena.getId() + "' zlyhal pri obnove blokov.", ex);
+                    networkManager.publishArenaStatus(
+                            ArenaStatusSnapshot.fromArena(configManager.getServerId(), arena)
+                    );
+                    return false;
+                }
             } else {
                 blockTracker.clearArena(arena.getId());
             }

@@ -45,6 +45,39 @@ public final class ConfigManager {
 
         plugin.reloadConfig();
         this.config = plugin.getConfig();
+
+        // Apply a per-server overlay so one JAR can be used by every backend.
+        String configuredId = config.getString("server.id", "standalone");
+        String selectedServerId = resolveServerId(configuredId, System.getenv("ARVYX_SERVER_ID"));
+        if (!selectedServerId.equalsIgnoreCase("standalone")
+                && selectedServerId.matches("[a-zA-Z0-9_-]+")) {
+            String serverConfigPath = "servers/" + selectedServerId.toLowerCase(java.util.Locale.ROOT) + ".yml";
+            File serverConfigFile = new File(plugin.getDataFolder(), serverConfigPath);
+            if (!serverConfigFile.exists()) {
+                try (InputStream bundled = plugin.getResource(serverConfigPath)) {
+                    if (bundled != null) {
+                        saveResourceIfMissing(serverConfigPath);
+                    }
+                } catch (Exception ex) {
+                    logger.warn("Nepodarilo sa pripraviť konfiguráciu servera " + serverConfigPath + ": " + ex.getMessage());
+                }
+            }
+            if (serverConfigFile.isFile()) {
+                YamlConfiguration serverOverrides = YamlConfiguration.loadConfiguration(serverConfigFile);
+                mergeIntoMainConfig(serverOverrides, "");
+                logger.info("Načítaná konfigurácia servera: " + serverConfigPath);
+            } else {
+                logger.warn("Konfigurácia '" + serverConfigPath + "' neexistuje; používajú sa hodnoty z config.yml.");
+            }
+        } else if (!selectedServerId.equalsIgnoreCase("standalone")) {
+            logger.warn("Neplatné server.id/ARVYX_SERVER_ID '" + selectedServerId + "'; overlay sa preskočil.");
+        }
+        String environmentServerId = System.getenv("ARVYX_SERVER_ID");
+        if (environmentServerId != null && !environmentServerId.isBlank()
+                && environmentServerId.matches("[a-zA-Z0-9_-]+")) {
+            config.set("server.id", environmentServerId.trim());
+        }
+
         this.arenasConfig = loadYaml("arenas.yml");
         this.messagesConfig = loadYaml("messages.yml");
         this.skyRushConfig = loadYaml("games/skyrush.yml");
@@ -88,6 +121,26 @@ public final class ConfigManager {
             logger.error("Nepodarilo sa načítať predvolený súbor " + relativePath, ex);
         }
         return loaded;
+    }
+
+    private void mergeIntoMainConfig(ConfigurationSection overrides, String parentPath) {
+        for (String key : overrides.getKeys(false)) {
+            String path = parentPath.isEmpty() ? key : parentPath + "." + key;
+            ConfigurationSection nested = overrides.getConfigurationSection(key);
+            if (nested != null) {
+                mergeIntoMainConfig(nested, path);
+            } else {
+                config.set(path, overrides.get(key));
+            }
+        }
+    }
+
+    static String resolveServerId(String configuredId, String environmentId) {
+        if (environmentId != null && !environmentId.isBlank()
+                && environmentId.trim().matches("[a-zA-Z0-9_-]+")) {
+            return environmentId.trim();
+        }
+        return configuredId == null || configuredId.isBlank() ? "standalone" : configuredId.trim();
     }
 
     private void validateMainConfig() {
@@ -268,22 +321,48 @@ public final class ConfigManager {
     }
 
     public boolean isRedisEnabled() {
-        return config.getBoolean("network.redis.enabled", false);
+        return environmentBooleanOrConfig("ARVYX_REDIS_ENABLED", "network.redis.enabled", false);
     }
 
     public RedisConfig getRedisConfig() {
         String envVar = config.getString("network.redis.password-env", "ARVYX_REDIS_PASSWORD");
         String password = (envVar != null && !envVar.isBlank()) ? System.getenv(envVar) : "";
         return new RedisConfig(
-                isRedisEnabled(),
-                config.getString("network.redis.host", "127.0.0.1"),
-                config.getInt("network.redis.port", 6379),
-                config.getBoolean("network.redis.ssl", false),
+                environmentBooleanOrConfig("ARVYX_REDIS_ENABLED", "network.redis.enabled", false),
+                environmentOrConfig("ARVYX_REDIS_HOST", "network.redis.host", "127.0.0.1"),
+                environmentIntOrConfig("ARVYX_REDIS_PORT", "network.redis.port", 6379),
+                environmentBooleanOrConfig("ARVYX_REDIS_SSL", "network.redis.ssl", false),
                 config.getInt("network.redis.timeout-ms", 2000),
                 password,
                 config.getString("network.redis.channel-prefix", "arvyx:network"),
                 getServerTimeoutSeconds()
         );
+    }
+
+    private String environmentOrConfig(String environmentKey, String configPath, String fallback) {
+        String value = System.getenv(environmentKey);
+        return value == null || value.isBlank() ? config.getString(configPath, fallback) : value.trim();
+    }
+
+    private int environmentIntOrConfig(String environmentKey, String configPath, int fallback) {
+        String value = System.getenv(environmentKey);
+        if (value == null || value.isBlank()) {
+            return config.getInt(configPath, fallback);
+        }
+        try {
+            int parsed = Integer.parseInt(value.trim());
+            return parsed > 0 && parsed <= 65535 ? parsed : config.getInt(configPath, fallback);
+        } catch (NumberFormatException ex) {
+            logger.warn("Neplatná hodnota " + environmentKey + "; použije sa konfigurácia.");
+            return config.getInt(configPath, fallback);
+        }
+    }
+
+    private boolean environmentBooleanOrConfig(String environmentKey, String configPath, boolean fallback) {
+        String value = System.getenv(environmentKey);
+        return value == null || value.isBlank()
+                ? config.getBoolean(configPath, fallback)
+                : Boolean.parseBoolean(value.trim());
     }
 
     public boolean isUseVelocityTransfer() {

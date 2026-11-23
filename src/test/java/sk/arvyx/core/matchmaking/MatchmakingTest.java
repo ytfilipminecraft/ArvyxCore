@@ -181,17 +181,40 @@ class MatchmakingTest {
         Instant exp = Instant.now().plusSeconds(15);
         NetworkMessage transferMsg = NetworkMessage.direct(
                 NetworkMessageType.PLAYER_TRANSFER_REQUEST,
-                "lobby",
+                "skyrush-1",
                 "skyrush-1",
                 Map.of(
+                        "requestId", "test-request-1",
                         "playerUuid", reservedRemotePlayer.toString(),
                         "arenaId", "skyrush-1a",
                         "expiresAtEpochMs", String.valueOf(exp.toEpochMilli())
                 )
         );
         AtomicReference<NetworkMessage> dispatched = new AtomicReference<>(transferMsg);
+        AtomicReference<NetworkMessage> ack = new AtomicReference<>();
+        networkManager.registerHandler(NetworkMessageType.PLAYER_TRANSFER_ACK, ack::set);
         assertTrue(matchmakingManager.handleIncomingReservationRequest(dispatched.get()));
         assertTrue(backendArena.hasValidReservation(reservedRemotePlayer, Instant.now()));
+        assertNotNull(ack.get());
+        assertEquals("test-request-1", ack.get().getPayloadValue("requestId"));
+        assertEquals("true", ack.get().getPayloadValue("accepted"));
+
+        // Aj neexistujúca aréna musí vrátiť explicitné odmietnutie, nie nechať zdroj čakať na timeout.
+        ack.set(null);
+        NetworkMessage rejectedRequest = NetworkMessage.direct(
+                NetworkMessageType.PLAYER_TRANSFER_REQUEST,
+                "skyrush-1",
+                "skyrush-1",
+                Map.of(
+                        "requestId", "test-request-rejected",
+                        "playerUuid", unreservedPlayer.toString(),
+                        "arenaId", "missing-arena",
+                        "expiresAtEpochMs", String.valueOf(Instant.now().plusSeconds(10).toEpochMilli())
+                )
+        );
+        assertFalse(matchmakingManager.handleIncomingReservationRequest(rejectedRequest));
+        assertNotNull(ack.get());
+        assertEquals("false", ack.get().getPayloadValue("accepted"));
 
         // Nerezervovaný hráč nesmie obsadiť posledné rezervované miesto
         assertEquals(MatchmakingManager.MatchmakingResult.Status.NO_ARENA_AVAILABLE,

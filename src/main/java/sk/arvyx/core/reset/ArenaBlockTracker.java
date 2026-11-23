@@ -101,32 +101,43 @@ public final class ArenaBlockTracker {
         if (arena == null) {
             return 0;
         }
-        List<BlockSnapshot> snapshots = drainSnapshotsInRestoreOrder(arena.getId());
-        if (snapshots.isEmpty()) {
+        String key = normalizeKey(arena.getId());
+        Map<BlockCoord, BlockSnapshot> arenaMap = trackedByArena.get(key);
+        if (arenaMap == null || arenaMap.isEmpty()) {
             return 0;
         }
+
+        List<BlockSnapshot> snapshots;
+        synchronized (arenaMap) {
+            snapshots = new ArrayList<>(arenaMap.values());
+        }
+        Collections.reverse(snapshots);
+
         World world = Bukkit.getWorld(arena.getWorldName());
         if (world == null) {
-            logger.warn("Svet '" + arena.getWorldName() + "' nie je načítaný — obnova " + snapshots.size()
-                    + " blokov arény '" + arena.getId() + "' preskočená.");
-            return 0;
+            throw new IllegalStateException("Svet '" + arena.getWorldName()
+                    + "' nie je načítaný; bloky arény '" + arena.getId() + "' neboli obnovené.");
         }
 
         int restored = 0;
         for (BlockSnapshot snapshot : snapshots) {
-            BlockCoord c = snapshot.coord();
-            if (!c.worldName().equalsIgnoreCase(world.getName())) {
-                continue;
+            BlockCoord coord = snapshot.coord();
+            if (!coord.worldName().equalsIgnoreCase(world.getName())) {
+                throw new IllegalStateException("Záznam bloku arény '" + arena.getId()
+                        + "' patrí do neočakávaného sveta '" + coord.worldName() + "'.");
             }
             try {
                 BlockData data = Bukkit.createBlockData(snapshot.originalBlockData());
-                world.getBlockAt(c.x(), c.y(), c.z()).setBlockData(data, false);
+                world.getBlockAt(coord.x(), coord.y(), coord.z()).setBlockData(data, false);
                 restored++;
             } catch (Exception ex) {
-                logger.warn("Nepodarilo sa obnoviť blok na [" + c.x() + "," + c.y() + "," + c.z()
-                        + "]: " + ex.getMessage());
+                throw new IllegalStateException("Nepodarilo sa obnoviť blok arény '" + arena.getId()
+                        + "' na [" + coord.x() + "," + coord.y() + "," + coord.z() + "].", ex);
             }
         }
+
+        // Záznamy odstránime až po kompletnej obnove; pri chybe zostanú dostupné na opakovanie.
+        trackedByArena.remove(key, arenaMap);
         logger.debug("Obnovených " + restored + " zmenených blokov v aréne '" + arena.getId() + "'.");
         return restored;
     }

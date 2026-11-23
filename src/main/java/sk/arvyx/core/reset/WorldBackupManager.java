@@ -18,6 +18,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 /**
  * Bezpečný správca záloh a obnovy svetov arén zo šablón.
@@ -107,12 +108,10 @@ public final class WorldBackupManager {
     /**
      * Bezpečne obnoví svet z pripravenej zálohy bez blokovania hlavného Minecraft vlákna.
      */
-    public void restoreWorldFromBackup(JavaPlugin plugin, String worldName, Runnable onCompleteMainThread) {
+    public void restoreWorldFromBackup(JavaPlugin plugin, String worldName, Consumer<Boolean> onCompleteMainThread) {
         if (!canSafelyReplaceWorld(worldName)) {
-            logger.warn("Obnova sveta '" + worldName + "' zo zálohy zamietnutá: chýba záloha alebo povolenie allow-world-replacement.");
-            if (onCompleteMainThread != null) {
-                onCompleteMainThread.run();
-            }
+            logger.warn("Obnova sveta '" + worldName + "' zamietnutá: chýba overená záloha alebo povolenie.");
+            completeOnMainThread(plugin, onCompleteMainThread, false);
             return;
         }
 
@@ -120,19 +119,14 @@ public final class WorldBackupManager {
         Path worldDir;
         if (loadedWorld != null) {
             if (!loadedWorld.getPlayers().isEmpty()) {
-                logger.warn("Svet '" + worldName + "' stále obsahuje hráčov — odinštalovanie sveta prerušené kvôli bezpečnosti.");
-                if (onCompleteMainThread != null) {
-                    onCompleteMainThread.run();
-                }
+                logger.warn("Svet '" + worldName + "' stále obsahuje hráčov — obnova zrušená.");
+                completeOnMainThread(plugin, onCompleteMainThread, false);
                 return;
             }
             worldDir = loadedWorld.getWorldFolder().toPath();
-            boolean unloaded = Bukkit.unloadWorld(loadedWorld, false);
-            if (!unloaded) {
-                logger.warn("Nepodarilo sa uvoľniť svet '" + worldName + "' pred obnovou zo zálohy.");
-                if (onCompleteMainThread != null) {
-                    onCompleteMainThread.run();
-                }
+            if (!Bukkit.unloadWorld(loadedWorld, false)) {
+                logger.warn("Nepodarilo sa uvoľniť svet '" + worldName + "' pred obnovou.");
+                completeOnMainThread(plugin, onCompleteMainThread, false);
                 return;
             }
         } else {
@@ -142,30 +136,83 @@ public final class WorldBackupManager {
         Path backupDir = getBackupDirectory(worldName);
         ioExecutor.execute(() -> {
             boolean restored = false;
+            Path stagingDir = worldDir.getParent().resolve(".restore-" + sanitizeWorldName(worldName));
+            Path previousDir = worldDir.getParent().resolve(".previous-" + sanitizeWorldName(worldName));
+            boolean movedOriginal = false;
             try {
-                Path stagingDir = worldDir.getParent().resolve(".restore-" + sanitizeWorldName(worldName));
                 deleteDirectoryIfExists(stagingDir);
+                deleteDirectoryIfExists(previousDir);
                 copyWorldDirectory(backupDir, stagingDir);
-                deleteDirectoryIfExists(worldDir);
-                Files.move(stagingDir, worldDir, StandardCopyOption.REPLACE_EXISTING);
+                if (!Files.isRegularFile(stagingDir.resolve("level.dat"))) {
+                    throw new IOException("Pripravená záloha neobsahuje level.dat");
+                }
+                if (Files.exists(worldDir)) {
+                    Files.move(worldDir, previousDir, StandardCopyOption.REPLACE_EXISTING);
+                    movedOriginal = true;
+                }
+                try {
+                    Files.move(stagingDir, worldDir, StandardCopyOption.REPLACE_EXISTING);
+                } catch (Exception moveFailure) {
+                    if (movedOriginal && !Files.exists(worldDir)) {
+                        Files.move(previousDir, worldDir, StandardCopyOption.REPLACE_EXISTING);
+                        movedOriginal = false;
+                    }
+                    throw moveFailure;
+                }
                 restored = true;
             } catch (Exception ex) {
-                logger.error("Chyba pri asynchrónnej obnove sveta '" + worldName + "' zo zálohy", ex);
+                logger.error("Chyba pri obnove sveta '" + worldName + "' zo zálohy", ex);
+                try {
+                    if (movedOriginal && !Files.exists(worldDir) && Files.exists(previousDir)) {
+                        Files.move(previousDir, worldDir, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                } catch (Exception rollbackFailure) {
+                    logger.error("Kritická chyba: nepodarilo sa vrátiť pôvodný svet '" + worldName + "'", rollbackFailure);
+                }
+            } finally {
+                try {
+                    deleteDirectoryIfExists(stagingDir);
+                } catch (IOException cleanupFailure) {
+                    logger.warn("Nepodarilo sa odstrániť dočasnú obnovovaciu zložku: " + cleanupFailure.getMessage());
+                }
             }
 
-            final boolean success = restored;
+            final boolean filesRestored = restored;
             if (plugin != null && plugin.isEnabled()) {
                 Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (success) {
-                        Bukkit.createWorld(new WorldCreator(worldName));
-                        logger.info("Svet '" + worldName + "' bol bezpečne obnovený zo zálohy a znova načítaný.");
+                    boolean success = false;
+                    if (filesRestored) {
+                        World recreated = Bukkit.createWorld(new WorldCreator(worldName));
+                        success = recreated != null;
+                        if (success) {
+                            logger.info("Svet '" + worldName + "' bol obnovený zo zálohy a znova načítaný.");
+                            try {
+                                deleteDirectoryIfExists(previousDir);
+                            } catch (IOException cleanupFailure) {
+                                logger.warn("Pôvodná záloha sveta '" + worldName + "' zostala v .previous: "
+                                        + cleanupFailure.getMessage());
+                            }
+                        } else {
+                            logger.error("Súbory sveta '" + worldName + "' boli obnovené, ale Bukkit ho nedokázal načítať.");
+                        }
                     }
                     if (onCompleteMainThread != null) {
-                        onCompleteMainThread.run();
+                        onCompleteMainThread.accept(success);
                     }
                 });
             }
         });
+    }
+
+    private void completeOnMainThread(JavaPlugin plugin, Consumer<Boolean> callback, boolean success) {
+        if (callback == null) {
+            return;
+        }
+        if (plugin == null || !plugin.isEnabled() || Bukkit.isPrimaryThread()) {
+            callback.accept(success);
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> callback.accept(success));
     }
 
     public void shutdown() {
