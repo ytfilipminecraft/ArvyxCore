@@ -167,7 +167,7 @@ public final class CoreModule {
                 networkManager,
                 logger
         );
-        this.matchmakingManager.attachRuntime(configManager, messageFormatter);
+        this.matchmakingManager.attachRuntime(configManager, messageFormatter, plugin);
 
         registerNetworkHandlers(chaosModule);
 
@@ -295,8 +295,21 @@ public final class CoreModule {
         networkManager.registerHandler(NetworkMessageType.PLAYER_TRANSFER_REQUEST, msg -> {
             String target = msg.getTargetServerId();
             if (target == null || target.isBlank()
-                    || target.equalsIgnoreCase(configManager.getServerId())) {
-                matchmakingManager.handleIncomingReservationRequest(msg);
+                    || !target.equalsIgnoreCase(configManager.getServerId())) {
+                return;
+            }
+            if (plugin.isEnabled()) {
+                Bukkit.getScheduler().runTask(plugin, () -> matchmakingManager.handleIncomingReservationRequest(msg));
+            }
+        });
+
+        networkManager.registerHandler(NetworkMessageType.PLAYER_TRANSFER_ACK, msg -> {
+            String target = msg.getTargetServerId();
+            if (target == null || !target.equalsIgnoreCase(configManager.getServerId())) {
+                return;
+            }
+            if (plugin.isEnabled()) {
+                Bukkit.getScheduler().runTask(plugin, () -> matchmakingManager.handleTransferAcknowledgement(msg));
             }
         });
 
