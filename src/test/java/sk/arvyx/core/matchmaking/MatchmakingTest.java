@@ -181,7 +181,7 @@ class MatchmakingTest {
         Instant exp = Instant.now().plusSeconds(15);
         NetworkMessage transferMsg = NetworkMessage.direct(
                 NetworkMessageType.PLAYER_TRANSFER_REQUEST,
-                "lobby",
+                "skyrush-1",
                 "skyrush-1",
                 Map.of(
                         "requestId", "test-request-1",
