@@ -352,9 +352,11 @@ public final class MatchmakingManager {
             if (!reservation.expiresAt().isAfter(now)
                     && outboundReservations.remove(entry.getKey(), reservation)) {
                 expired++;
-                Player player = Bukkit.getPlayer(entry.getKey());
-                if (player != null && player.isOnline()) {
-                    sendMsg(player, "matchmaking.no-arena-available", Map.of("type", "požadovaná hra"));
+                if (plugin != null && plugin.isEnabled()) {
+                    Player player = Bukkit.getPlayer(entry.getKey());
+                    if (player != null && player.isOnline()) {
+                        sendMsg(player, "matchmaking.no-arena-available", Map.of("type", "požadovaná hra"));
+                    }
                 }
             }
         }
