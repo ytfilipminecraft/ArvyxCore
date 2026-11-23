@@ -8,6 +8,7 @@ import sk.arvyx.core.arena.ArenaManager;
 import sk.arvyx.core.arena.ArenaType;
 import sk.arvyx.core.util.Logger;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -59,10 +60,14 @@ class PlayerManagerTest {
     }
 
     @Test
-    void enforcesArenaCapacityAndCleansUpOnQuit() {
+    void enforcesArenaCapacityAndFreesPlayerDataOnQuitWithoutMemoryLeak() {
         UUID p1 = UUID.randomUUID();
         UUID p2 = UUID.randomUUID();
         UUID p3 = UUID.randomUUID();
+
+        playerManager.handleJoin(p1, "P1");
+        playerManager.handleJoin(p2, "P2");
+        assertEquals(2, playerManager.getTrackedPlayerCount());
 
         assertEquals(PlayerManager.JoinResult.SUCCESS, playerManager.assignPlayerToArena(p1, arenaOne));
         assertEquals(PlayerManager.JoinResult.SUCCESS, playerManager.assignPlayerToArena(p2, arenaOne));
@@ -70,7 +75,28 @@ class PlayerManagerTest {
 
         playerManager.handleQuit(p1);
         assertFalse(playerManager.isInArena(p1));
+        assertTrue(playerManager.getPlayerData(p1).isEmpty());
         assertEquals(1, arenaOne.getCurrentPlayerCount());
         assertEquals(PlayerManager.JoinResult.SUCCESS, playerManager.assignPlayerToArena(p3, arenaOne));
+
+        playerManager.handleQuit(p2);
+        playerManager.handleQuit(p3);
+        assertEquals(0, playerManager.getTrackedPlayerCount());
+    }
+
+    @Test
+    void respectsReservedSlotsDuringArenaAssignment() {
+        UUID p1 = UUID.randomUUID();
+        UUID reserved = UUID.randomUUID();
+        UUID unreserved = UUID.randomUUID();
+
+        assertEquals(PlayerManager.JoinResult.SUCCESS, playerManager.assignPlayerToArena(p1, arenaOne));
+        assertTrue(arenaOne.reserveSlot(reserved, Instant.now().plusSeconds(15), Instant.now()));
+
+        // Posledné voľné miesto je rezervované -> nerezervovaný hráč je odmietnutý
+        assertEquals(PlayerManager.JoinResult.ARENA_FULL, playerManager.assignPlayerToArena(unreserved, arenaOne));
+        // Rezervovaný hráč ho môže okamžite obsadiť
+        assertEquals(PlayerManager.JoinResult.SUCCESS, playerManager.assignPlayerToArena(reserved, arenaOne));
+        assertFalse(arenaOne.hasValidReservation(reserved, Instant.now()));
     }
 }

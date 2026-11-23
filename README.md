@@ -1,4 +1,4 @@
-# ArvyxCore 1.1.0 (ARVYX NETWORK)
+# ArvyxCore 1.1.1 (ARVYX NETWORK)
 
 **ArvyxCore** je modulárny, bezpečnostne orientovaný základný Minecraft Paper plugin pre sieť **ARVYX NETWORK**, navrhnutý pre **Paper 26.3**, **Java 25** a **Gradle Kotlin DSL**.
 
@@ -24,16 +24,16 @@ Každá aréna v `arenas.yml` je viazaná poľom `server` na konkrétny `server.
 
 ---
 
-## 2. Novinky vo verzii 1.1.0
+## 2. Novinky vo verziách 1.1.0 – 1.1.1
 
-- **Matchmaking (`MatchmakingManager`):**
-  - `/arvyx join skyrush` a `/arvyx join chaos` vyberajú najlepšiu voľnú lokálnu arénu (alebo presunú hráča cez Velocity na najvhodnejší online backend server), skontrolujú kapacitu a stav, zabránia duplicitnému priradeniu, teleportujú hráča na lobby arény a po dosiahnutí `min-players` automaticky spustia odpočítavanie.
-  - `/arvyx leave` bezpečne odstráni hráča z arény, vyhodnotí prípadné ukončenie zápasu alebo zrušenie odpočítavania a vráti hráča na lobby.
+- **Matchmaking a rezervácie miest (`MatchmakingManager`, `Arena`):**
+  - `/arvyx join skyrush` a `/arvyx join chaos` vyberajú najlepšiu voľnú lokálnu arénu alebo rezervujú miesto na cieľovom backend serveri (`PLAYER_TRANSFER_REQUEST` s TTL 15s) a presunú hráča cez Velocity (`claimReservationOnJoin` po príchode).
+  - `/arvyx leave` a odpojenie hráča (`PlayerLifecycleListener`) bezpečne vyhodnocujú elimináciu/víťaza zápasu pred odstránením dát z arény.
 - **Skutočná sieťová komunikácia (`RedisNetworkManager`):**
-  - Asynchrónny Redis Pub/Sub na troch kanáloch (`servers`, `arenas`, `messages`), periodický heartbeat, detekcia nedostupných serverov po timeout-e a automatický bezpečný fallback do lokálneho režimu pri výpadku Redis.
-- **Bezpečný reset SkyRush máp (`ArenaBlockTracker`, `WorldBackupManager`, `ResetManager`):**
-  - Dvojitá ochrana proti súbežnému resetu (`activeResets`), obnova zmenených blokov a dočasných stavieb, doplnenie loot truhlíc, čistenie dočasných entít a voliteľná asynchrónna obnova sveta z overenej zálohy.
-  - Bezpečné ošetrenie aktívnych zápasov pri vypnutí/reštarte backend servera.
+  - Asynchrónny Redis Pub/Sub na troch kanáloch (`servers`, `arenas`, `messages`), blokujúce odberateľské spojenie bez zbytočných `SocketTimeoutException`, čisté zatvorenie pri vypnutí, resynchronizácia po opätovnom pripojení a bezpečný lokálny fallback pri výpadku.
+- **Bezpečný reset a ochrana máp (`ArenaBlockTracker`, `WorldBackupManager`, `ResetManager`, `ArenaBlockListener`):**
+  - Sledovanie zmenených blokov, tekutín (`BlockFromToEvent`), výbuchov aj SkyRush Supply Drop truhlíc, ochrana nečinných/resetujúcich sa arén, obnova inventára/efektov/gravitácie a voliteľná obnova sveta zo zálohy.
+  - Bezpečné ošetrenie aktívnych zápasov pri vypnutí/reštarte backend servera a uvoľnenie offline `PlayerData` proti úniku pamäte.
 
 ---
 
@@ -70,11 +70,11 @@ Každá aréna v `arenas.yml` je viazaná poľom `server` na konkrétny `server.
 Výsledný self-contained plugin (vrátane relokovaného Redis klienta) sa nachádza v:
 
 ```text
-build/libs/ArvyxCore-1.1.0.jar
+build/libs/ArvyxCore-1.1.1.jar
 ```
 
 ### Nasadenie na sieť
-1. Nahrajte `build/libs/ArvyxCore-1.1.0.jar` do priečinka `plugins/` na všetkých 6 serveroch (`lobby`, `skyrush-1..3`, `chaos-1..2`).
+1. Nahrajte `build/libs/ArvyxCore-1.1.1.jar` do priečinka `plugins/` na všetkých 6 serveroch (`lobby`, `skyrush-1..3`, `chaos-1..2`).
 2. Pre každý server nastavte príslušnú konfiguráciu podľa šablón v `src/main/resources/servers/<server-id>.yml`.
 3. Ak používate Redis s heslom, nastavte systémovú premennú `ARVYX_REDIS_PASSWORD` pred spustením Paper servera.
 4. Na každom backend serveri sa automaticky zaregistrujú iba arény z `arenas.yml`, ktorých `server` zodpovedá jeho `server.id`.

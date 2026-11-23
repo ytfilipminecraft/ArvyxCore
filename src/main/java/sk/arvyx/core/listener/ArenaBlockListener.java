@@ -8,6 +8,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockBurnEvent;
 import org.bukkit.event.block.BlockExplodeEvent;
+import org.bukkit.event.block.BlockFromToEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import sk.arvyx.core.arena.Arena;
@@ -15,10 +16,12 @@ import sk.arvyx.core.arena.ArenaManager;
 import sk.arvyx.core.arena.ArenaState;
 import sk.arvyx.core.reset.ArenaBlockTracker;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
- * Chráni čakajúce/resetujúce sa arény pred úpravou blokov a zaznamenáva zmeny blokov počas INGAME fázy.
+ * Chráni čakajúce/resetujúce sa arény pred úpravou blokov, explóziami či rozliatím tekutín
+ * a zaznamenáva pôvodné stavy zmenených blokov počas INGAME fázy.
  */
 public final class ArenaBlockListener implements Listener {
 
@@ -83,37 +86,71 @@ public final class ArenaBlockListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onEntityExplode(EntityExplodeEvent event) {
-        recordExplosionBlocks(event.getLocation().getWorld().getName(), event.blockList());
+        handleExplosionBlocks(event.getLocation().getWorld().getName(), event.blockList());
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockExplode(BlockExplodeEvent event) {
-        recordExplosionBlocks(event.getBlock().getWorld().getName(), event.blockList());
+        handleExplosionBlocks(event.getBlock().getWorld().getName(), event.blockList());
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockBurn(BlockBurnEvent event) {
-        if (!trackModifiedBlocks) {
-            return;
-        }
         String worldName = event.getBlock().getWorld().getName();
         for (Arena arena : arenaManager.getAllArenas()) {
-            if (arena.getState() == ArenaState.INGAME && arena.getWorldName().equalsIgnoreCase(worldName)) {
+            if (!arena.getWorldName().equalsIgnoreCase(worldName)) {
+                continue;
+            }
+            if (arena.getState() != ArenaState.INGAME && arena.getState() != ArenaState.DISABLED) {
+                event.setCancelled(true);
+                return;
+            }
+            if (trackModifiedBlocks && arena.getState() == ArenaState.INGAME) {
                 blockTracker.recordOriginalBlock(arena.getId(), event.getBlock());
             }
         }
     }
 
-    private void recordExplosionBlocks(String worldName, java.util.List<Block> blocks) {
-        if (!trackModifiedBlocks || blocks.isEmpty()) {
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onBlockFromTo(BlockFromToEvent event) {
+        String worldName = event.getBlock().getWorld().getName();
+        for (Arena arena : arenaManager.getAllArenas()) {
+            if (!arena.getWorldName().equalsIgnoreCase(worldName)) {
+                continue;
+            }
+            if (arena.getState() != ArenaState.INGAME && arena.getState() != ArenaState.DISABLED) {
+                event.setCancelled(true);
+                return;
+            }
+            if (trackModifiedBlocks && arena.getState() == ArenaState.INGAME) {
+                blockTracker.recordOriginalBlock(arena.getId(), event.getToBlock());
+            }
+        }
+    }
+
+    private void handleExplosionBlocks(String worldName, List<Block> blocks) {
+        if (blocks.isEmpty()) {
             return;
         }
+        boolean hasProtectedArena = false;
+        boolean hasActiveIngameArena = false;
         for (Arena arena : arenaManager.getAllArenas()) {
-            if (arena.getState() == ArenaState.INGAME && arena.getWorldName().equalsIgnoreCase(worldName)) {
-                for (Block block : blocks) {
-                    blockTracker.recordOriginalBlock(arena.getId(), block);
-                }
+            if (!arena.getWorldName().equalsIgnoreCase(worldName)) {
+                continue;
             }
+            if (arena.getState() == ArenaState.INGAME) {
+                hasActiveIngameArena = true;
+                if (trackModifiedBlocks) {
+                    for (Block block : blocks) {
+                        blockTracker.recordOriginalBlock(arena.getId(), block);
+                    }
+                }
+            } else if (arena.getState() != ArenaState.DISABLED) {
+                hasProtectedArena = true;
+            }
+        }
+        if (hasProtectedArena && !hasActiveIngameArena) {
+            blocks.clear();
         }
     }
 }

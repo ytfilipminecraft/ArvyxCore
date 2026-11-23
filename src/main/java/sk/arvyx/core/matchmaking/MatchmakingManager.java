@@ -11,20 +11,28 @@ import sk.arvyx.core.countdown.CountdownManager;
 import sk.arvyx.core.game.GameManager;
 import sk.arvyx.core.network.ArenaStatusSnapshot;
 import sk.arvyx.core.network.NetworkManager;
+import sk.arvyx.core.network.NetworkMessage;
+import sk.arvyx.core.network.NetworkMessageType;
 import sk.arvyx.core.player.PlayerManager;
 import sk.arvyx.core.util.Logger;
 import sk.arvyx.core.util.MessageFormatter;
 
+import java.time.Instant;
 import java.util.Comparator;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Systém matchmakingu pre výber voľnej arény podľa typu hry, pripojenie a bezpečné odpojenie hráčov.
+ * Systém matchmakingu pre výber voľnej arény, rezerváciu miest medzi servermi,
+ * automatické pripojenie po Velocity prenose a bezpečné odpojenie hráčov.
  */
 public final class MatchmakingManager {
+
+    public static final long RESERVATION_TTL_SECONDS = 15L;
 
     public record MatchmakingResult(
             Status status,
@@ -41,6 +49,9 @@ public final class MatchmakingManager {
         }
     }
 
+    private record OutboundReservation(UUID playerId, String serverId, String arenaId, Instant expiresAt) {
+    }
+
     private final String localServerId;
     private final ArenaManager arenaManager;
     private final PlayerManager playerManager;
@@ -48,6 +59,8 @@ public final class MatchmakingManager {
     private final GameManager gameManager;
     private final NetworkManager networkManager;
     private final Logger logger;
+
+    private final Map<UUID, OutboundReservation> outboundReservations = new ConcurrentHashMap<>();
 
     private ConfigManager configManager;
     private MessageFormatter messageFormatter;
@@ -75,39 +88,40 @@ public final class MatchmakingManager {
         this.messageFormatter = messageFormatter;
     }
 
-    /**
-     * Vyberie najlepšiu dostupnú lokálnu arénu podľa typu hry.
-     * Uprednostní arénu, v ktorej už čakajú hráči (rýchlejšie naplnenie zápasu).
-     */
     public Optional<Arena> selectBestLocalArena(ArenaType type) {
         if (type == null) {
             return Optional.empty();
         }
+        Instant now = Instant.now();
         return arenaManager.getArenasByType(type).stream()
                 .filter(arena -> arena.getState().isJoinable())
-                .filter(arena -> !arena.isFull())
+                .filter(arena -> !arena.isFullIncludingReservations(now))
                 .max(Comparator
                         .comparingInt((Arena a) -> a.getState() == ArenaState.STARTING ? 1 : 0)
-                        .thenComparingInt(Arena::getCurrentPlayerCount)
+                        .thenComparingInt(a -> a.getEffectivePlayerCount(now))
                         .thenComparing(Arena::getId, Comparator.reverseOrder()));
     }
 
-    /**
-     * Vyberie najlepšiu dostupnú vzdialenú arénu zo synchronizovaných snímok online serverov.
-     */
     public Optional<ArenaStatusSnapshot> selectBestRemoteArena(ArenaType type) {
         if (type == null) {
             return Optional.empty();
         }
+        Instant now = Instant.now();
+        pruneExpiredOutboundReservations(now);
+
         return networkManager.getJoinableRemoteArenas(type).stream()
+                .filter(snapshot -> {
+                    int pending = countOutboundFor(snapshot.serverId(), snapshot.arenaId());
+                    return (snapshot.currentPlayers() + pending) < snapshot.maxPlayers();
+                })
                 .max(Comparator
                         .comparingInt((ArenaStatusSnapshot s) -> s.state() == ArenaState.STARTING ? 1 : 0)
-                        .thenComparingInt(ArenaStatusSnapshot::currentPlayers)
+                        .thenComparingInt(s -> s.currentPlayers() + countOutboundFor(s.serverId(), s.arenaId()))
                         .thenComparing(ArenaStatusSnapshot::arenaId, Comparator.reverseOrder()));
     }
 
     /**
-     * Čistá logika priradenia hráča do lokálnej arény vrátane automatického spustenia odpočítavania.
+     * Priradí hráča do najlepšej dostupnej lokálnej arény (vrátane prípadnej rezervácie).
      */
     public synchronized MatchmakingResult assignToBestLocalArena(UUID playerId, ArenaType type) {
         Objects.requireNonNull(playerId, "playerId nesmie byť null");
@@ -121,8 +135,17 @@ public final class MatchmakingManager {
         if (arenaOpt.isEmpty()) {
             return new MatchmakingResult(MatchmakingResult.Status.NO_ARENA_AVAILABLE, null, null, false);
         }
+        return assignToSpecificLocalArena(playerId, arenaOpt.get());
+    }
 
-        Arena arena = arenaOpt.get();
+    public synchronized MatchmakingResult assignToSpecificLocalArena(UUID playerId, Arena arena) {
+        Objects.requireNonNull(playerId, "playerId nesmie byť null");
+        Objects.requireNonNull(arena, "arena nesmie byť null");
+
+        if (playerManager.isInArena(playerId)) {
+            return new MatchmakingResult(MatchmakingResult.Status.ALREADY_IN_ARENA, null, null, false);
+        }
+
         PlayerManager.JoinResult joinResult = playerManager.assignPlayerToArena(playerId, arena);
         if (joinResult == PlayerManager.JoinResult.ALREADY_IN_OTHER_ARENA
                 || joinResult == PlayerManager.JoinResult.ALREADY_IN_THIS_ARENA) {
@@ -142,6 +165,105 @@ public final class MatchmakingManager {
     }
 
     /**
+     * Spracuje prichádzajúcu požiadavku na rezerváciu miesta z iného servera cez Redis.
+     */
+    public synchronized boolean handleIncomingReservationRequest(NetworkMessage message) {
+        if (message == null || message.getType() != NetworkMessageType.PLAYER_TRANSFER_REQUEST) {
+            return false;
+        }
+        String rawUuid = message.getPayloadValue("playerUuid");
+        String arenaId = message.getPayloadValue("arenaId");
+        String rawExpires = message.getPayloadValue("expiresAtEpochMs");
+        if (rawUuid == null || arenaId == null) {
+            return false;
+        }
+
+        UUID playerUuid;
+        Instant expiresAt;
+        try {
+            playerUuid = UUID.fromString(rawUuid);
+            long expMs = rawExpires != null
+                    ? Long.parseLong(rawExpires)
+                    : Instant.now().plusSeconds(RESERVATION_TTL_SECONDS).toEpochMilli();
+            expiresAt = Instant.ofEpochMilli(expMs);
+        } catch (IllegalArgumentException ex) {
+            return false;
+        }
+
+        Optional<Arena> arenaOpt = arenaManager.getArena(arenaId);
+        if (arenaOpt.isEmpty()) {
+            return false;
+        }
+        Arena arena = arenaOpt.get();
+        boolean reserved = arena.reserveSlot(playerUuid, expiresAt, Instant.now());
+        if (reserved) {
+            logger.debug("Rezervované miesto v aréne '" + arena.getId() + "' pre hráča " + playerUuid);
+            networkManager.publishArenaStatus(ArenaStatusSnapshot.fromArena(localServerId, arena));
+        }
+        return reserved;
+    }
+
+    /**
+     * Po pripojení hráča na backend server skontroluje, či má aktívnu rezerváciu a rovno ho zaradí do arény.
+     */
+    public synchronized boolean claimReservationOnJoin(Player player) {
+        if (player == null || !player.isOnline()) {
+            return false;
+        }
+        UUID uuid = player.getUniqueId();
+        Instant now = Instant.now();
+        for (Arena arena : arenaManager.getAllArenas()) {
+            if (arena.hasValidReservation(uuid, now)) {
+                MatchmakingResult result = assignToSpecificLocalArena(uuid, arena);
+                if (result.status() == MatchmakingResult.Status.JOINED_LOCAL) {
+                    placeJoinedPlayerInArenaLobby(player, arena, result.countdownStarted());
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Rezervuje vzdialenú arénu (čisto dátová časť testovateľná bez Velocity/Bukkit hráča).
+     */
+    public synchronized Optional<ArenaStatusSnapshot> reserveRemoteTransfer(UUID playerId, ArenaType type, Instant now) {
+        Objects.requireNonNull(playerId, "playerId nesmie byť null");
+        Objects.requireNonNull(type, "type nesmie byť null");
+        Objects.requireNonNull(now, "now nesmie byť null");
+
+        if (playerManager.isInArena(playerId) || outboundReservations.containsKey(playerId)) {
+            return Optional.empty();
+        }
+        Optional<ArenaStatusSnapshot> remoteOpt = selectBestRemoteArena(type);
+        if (remoteOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        ArenaStatusSnapshot remote = remoteOpt.get();
+        Instant expiresAt = now.plusSeconds(RESERVATION_TTL_SECONDS);
+        outboundReservations.put(playerId, new OutboundReservation(playerId, remote.serverId(), remote.arenaId(), expiresAt));
+
+        networkManager.sendMessage(NetworkMessage.direct(
+                NetworkMessageType.PLAYER_TRANSFER_REQUEST,
+                localServerId,
+                remote.serverId(),
+                Map.of(
+                        "playerUuid", playerId.toString(),
+                        "arenaId", remote.arenaId(),
+                        "gameType", type.name(),
+                        "expiresAtEpochMs", String.valueOf(expiresAt.toEpochMilli())
+                )
+        ));
+        return Optional.of(remote);
+    }
+
+    public void cancelOutboundReservation(UUID playerId) {
+        if (playerId != null) {
+            outboundReservations.remove(playerId);
+        }
+    }
+
+    /**
      * Kompletné pripojenie hráča v prostredí Paper (lokálna aréna alebo Velocity presun na vzdialený backend).
      */
     public MatchmakingResult joinPlayer(Player player, ArenaType type) {
@@ -157,33 +279,17 @@ public final class MatchmakingManager {
             return new MatchmakingResult(MatchmakingResult.Status.ALREADY_IN_ARENA, null, null, false);
         }
 
-        // 1. Pokus o pripojenie do lokálnej arény na tomto serveri
+        // 1. Lokálna aréna
         MatchmakingResult localResult = assignToBestLocalArena(uuid, type);
         if (localResult.status() == MatchmakingResult.Status.JOINED_LOCAL && localResult.localArena() != null) {
-            Arena arena = localResult.localArena();
-            playerManager.restoreCleanPlayerState(player);
-            player.setGameMode(GameMode.ADVENTURE);
-            arena.getLobbySpawn().toBukkitLocation().ifPresentOrElse(
-                    player::teleport,
-                    () -> logger.warn("Svet '" + arena.getWorldName() + "' pre arénu '" + arena.getId()
-                            + "' nie je načítaný — teleport do lobby arény preskočený.")
-            );
-
-            sendMsg(player, "arena.join-success", Map.of(
-                    "arena", arena.getName(),
-                    "players", String.valueOf(arena.getCurrentPlayerCount()),
-                    "max", String.valueOf(arena.getMaxPlayers())
-            ));
-            if (localResult.countdownStarted()) {
-                sendMsg(player, "matchmaking.auto-countdown-started", Map.of());
-            }
+            placeJoinedPlayerInArenaLobby(player, localResult.localArena(), localResult.countdownStarted());
             return localResult;
         }
 
-        // 2. Vyhľadanie voľnej arény na vzdialenom backend serveri cez Velocity
-        Optional<ArenaStatusSnapshot> remoteOpt = selectBestRemoteArena(type);
-        if (remoteOpt.isPresent()) {
-            ArenaStatusSnapshot remote = remoteOpt.get();
+        // 2. Vzdialená aréna cez Redis rezerváciu + Velocity presun
+        Optional<ArenaStatusSnapshot> reservedRemote = reserveRemoteTransfer(uuid, type, Instant.now());
+        if (reservedRemote.isPresent()) {
+            ArenaStatusSnapshot remote = reservedRemote.get();
             sendMsg(player, "matchmaking.transferring-remote", Map.of(
                     "arena", remote.arenaId(),
                     "server", remote.serverId()
@@ -191,10 +297,30 @@ public final class MatchmakingManager {
             if (playerManager.transferToServer(player, remote.serverId())) {
                 return new MatchmakingResult(MatchmakingResult.Status.TRANSFERRED_REMOTE, null, remote, false);
             }
+            cancelOutboundReservation(uuid);
         }
 
         sendMsg(player, "matchmaking.no-arena-available", Map.of("type", type.getDisplayName()));
         return new MatchmakingResult(MatchmakingResult.Status.NO_ARENA_AVAILABLE, null, null, false);
+    }
+
+    private void placeJoinedPlayerInArenaLobby(Player player, Arena arena, boolean countdownStarted) {
+        playerManager.restoreCleanPlayerState(player);
+        player.setGameMode(GameMode.ADVENTURE);
+        arena.getLobbySpawn().toBukkitLocation().ifPresentOrElse(
+                player::teleport,
+                () -> logger.warn("Svet '" + arena.getWorldName() + "' pre arénu '" + arena.getId()
+                        + "' nie je načítaný — teleport do lobby arény preskočený.")
+        );
+
+        sendMsg(player, "arena.join-success", Map.of(
+                "arena", arena.getName(),
+                "players", String.valueOf(arena.getCurrentPlayerCount()),
+                "max", String.valueOf(arena.getMaxPlayers())
+        ));
+        if (countdownStarted) {
+            sendMsg(player, "matchmaking.auto-countdown-started", Map.of());
+        }
     }
 
     /**
@@ -204,16 +330,21 @@ public final class MatchmakingManager {
         Objects.requireNonNull(player, "player nesmie byť null");
         UUID uuid = player.getUniqueId();
 
-        Optional<Arena> arenaOpt = playerManager.removePlayerFromArena(uuid);
-        if (arenaOpt.isEmpty()) {
+        Optional<Arena> currentOpt = arenaManager.findArenaByPlayer(uuid);
+        if (currentOpt.isEmpty()) {
             sendMsg(player, "matchmaking.not-in-arena", Map.of());
             return false;
         }
 
-        Arena arena = arenaOpt.get();
-        if (arena.getState() == ArenaState.INGAME) {
+        Arena arena = currentOpt.get();
+        ArenaState stateBeforeRemove = arena.getState();
+        boolean wasAlive = arena.isPlayerAlive(uuid);
+
+        playerManager.removePlayerFromArena(uuid);
+
+        if (stateBeforeRemove == ArenaState.INGAME && wasAlive) {
             gameManager.handlePlayerQuit(arena, uuid);
-        } else if (arena.getState() == ArenaState.STARTING && !arena.hasMinimumPlayers()) {
+        } else if (stateBeforeRemove == ArenaState.STARTING && !arena.hasMinimumPlayers()) {
             countdownManager.cancelCountdown(arena.getId(), true);
         }
 
@@ -221,6 +352,34 @@ public final class MatchmakingManager {
         sendMsg(player, "arena.leave-success", Map.of("arena", arena.getName()));
         playerManager.returnToLobby(player);
         return true;
+    }
+
+    public int cleanupExpiredReservations(Instant now) {
+        Objects.requireNonNull(now, "now nesmie byť null");
+        int removed = pruneExpiredOutboundReservations(now);
+        for (Arena arena : arenaManager.getAllArenas()) {
+            removed += arena.pruneExpiredReservations(now);
+        }
+        return removed;
+    }
+
+    private int pruneExpiredOutboundReservations(Instant now) {
+        int before = outboundReservations.size();
+        outboundReservations.entrySet().removeIf(e -> !e.getValue().expiresAt().isAfter(now));
+        return before - outboundReservations.size();
+    }
+
+    private int countOutboundFor(String serverId, String arenaId) {
+        String s = serverId.toLowerCase(Locale.ROOT);
+        String a = arenaId.toLowerCase(Locale.ROOT);
+        int count = 0;
+        for (OutboundReservation res : outboundReservations.values()) {
+            if (res.serverId().toLowerCase(Locale.ROOT).equals(s)
+                    && res.arenaId().toLowerCase(Locale.ROOT).equals(a)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private void sendMsg(Player player, String key, Map<String, String> placeholders) {

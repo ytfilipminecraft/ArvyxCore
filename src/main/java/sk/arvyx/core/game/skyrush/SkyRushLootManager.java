@@ -11,6 +11,7 @@ import org.bukkit.block.Chest;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import sk.arvyx.core.arena.Arena;
+import sk.arvyx.core.reset.ArenaBlockTracker;
 import sk.arvyx.core.util.Logger;
 
 import java.util.List;
@@ -81,7 +82,7 @@ public final class SkyRushLootManager {
         return filledCount;
     }
 
-    public boolean spawnSupplyDrop(Arena arena, SkyRushConfig config) {
+    public boolean spawnSupplyDrop(Arena arena, SkyRushConfig config, ArenaBlockTracker blockTracker) {
         World world = Bukkit.getWorld(arena.getWorldName());
         if (world == null) {
             return false;
@@ -96,6 +97,9 @@ public final class SkyRushLootManager {
         Block block = world.getBlockAt(targetX, y, targetZ);
         if (!block.getType().isAir() && block.getType() != Material.CHEST) {
             block = world.getBlockAt(targetX, y + 1, targetZ);
+        }
+        if (blockTracker != null) {
+            blockTracker.recordOriginalBlock(arena.getId(), block);
         }
         block.setType(Material.CHEST, false);
         if (block.getState() instanceof Chest chest) {

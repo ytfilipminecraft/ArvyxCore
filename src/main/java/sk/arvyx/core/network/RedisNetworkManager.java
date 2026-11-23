@@ -22,8 +22,8 @@ import java.util.function.Consumer;
 
 /**
  * Skutočný distribuovaný NetworkManager využívajúci Redis Pub/Sub.
- * Všetky Redis I/O operácie prebiehajú asynchrónne mimo hlavného Minecraft vlákna.
- * Pri výpadku Redis sa bezpečne prepne do lokálneho fallback režimu a automaticky sa pokúša obnoviť spojenie.
+ * Používa samostatné spojenie pre blokujúci odber (socketTimeout=0) a pool pre asynchrónne publikovanie.
+ * Pri výpadku Redis sa bezpečne prepne do lokálneho fallback režimu a automaticky sa znova pripája.
  */
 public final class RedisNetworkManager implements NetworkManager {
 
@@ -38,7 +38,9 @@ public final class RedisNetworkManager implements NetworkManager {
     private ExecutorService publishExecutor;
     private Thread subscriberThread;
     private volatile JedisPool jedisPool;
+    private volatile Jedis subscriberJedis;
     private volatile JedisPubSub activePubSub;
+    private volatile Runnable onReconnectCallback;
 
     public RedisNetworkManager(
             Logger logger,
@@ -56,6 +58,10 @@ public final class RedisNetworkManager implements NetworkManager {
                 displayName,
                 redisConfig.serverTimeoutSeconds()
         );
+    }
+
+    public void setOnReconnectCallback(Runnable onReconnectCallback) {
+        this.onReconnectCallback = onReconnectCallback;
     }
 
     @Override
@@ -84,29 +90,35 @@ public final class RedisNetworkManager implements NetworkManager {
         this.subscriberThread.start();
     }
 
+    private static DefaultJedisClientConfig buildClientConfig(RedisConfig cfg, int socketTimeoutMs) {
+        DefaultJedisClientConfig.Builder clientBuilder = DefaultJedisClientConfig.builder()
+                .connectionTimeoutMillis(cfg.timeoutMs())
+                .socketTimeoutMillis(socketTimeoutMs)
+                .ssl(cfg.ssl());
+
+        if (cfg.password() != null && !cfg.password().isEmpty()) {
+            clientBuilder.password(cfg.password());
+        }
+        return clientBuilder.build();
+    }
+
     private static JedisPool createPool(RedisConfig cfg) {
         JedisPoolConfig poolConfig = new JedisPoolConfig();
         poolConfig.setMaxTotal(8);
         poolConfig.setMaxIdle(4);
         poolConfig.setMinIdle(1);
         poolConfig.setTestOnBorrow(true);
-
-        DefaultJedisClientConfig.Builder clientBuilder = DefaultJedisClientConfig.builder()
-                .connectionTimeoutMillis(cfg.timeoutMs())
-                .socketTimeoutMillis(cfg.timeoutMs())
-                .ssl(cfg.ssl());
-
-        if (cfg.password() != null && !cfg.password().isEmpty()) {
-            clientBuilder.password(cfg.password());
-        }
-
-        return new JedisPool(poolConfig, new HostAndPort(cfg.host(), cfg.port()), clientBuilder.build());
+        return new JedisPool(
+                poolConfig,
+                new HostAndPort(cfg.host(), cfg.port()),
+                buildClientConfig(cfg, cfg.timeoutMs())
+        );
     }
 
     private void runSubscriberLoop() {
         long backoffMs = 2000L;
         while (running.get()) {
-            if (jedisPool == null) {
+            if (jedisPool == null || jedisPool.isClosed()) {
                 try {
                     jedisPool = createPool(redisConfig);
                 } catch (Exception ex) {
@@ -119,8 +131,13 @@ public final class RedisNetworkManager implements NetworkManager {
                 }
             }
 
-            try (Jedis subscriberJedis = jedisPool.getResource()) {
-                subscriberJedis.ping();
+            // Odberateľské spojenie má socketTimeout=0, aby ticho na kanáli nespôsobovalo SocketTimeoutException
+            try (Jedis subClient = new Jedis(
+                    new HostAndPort(redisConfig.host(), redisConfig.port()),
+                    buildClientConfig(redisConfig, 0)
+            )) {
+                this.subscriberJedis = subClient;
+                subClient.ping();
                 redisConnected.set(true);
                 outageLogged.set(false);
                 backoffMs = 2000L;
@@ -128,8 +145,15 @@ public final class RedisNetworkManager implements NetworkManager {
                 logger.info("Redis Pub/Sub pripojené (" + redisConfig.host() + ":" + redisConfig.port()
                         + ", prefix=" + redisConfig.channelPrefix() + ").");
 
-                // Po pripojení okamžite ohlásime prítomnosť servera
                 publishServerInfoAsync(stateStore.getLocalServerInfo());
+                Runnable reconnectCb = this.onReconnectCallback;
+                if (reconnectCb != null) {
+                    try {
+                        reconnectCb.run();
+                    } catch (Exception ex) {
+                        logger.warn("Chyba pri synchronizácii stavov po pripojení na Redis: " + ex.getMessage());
+                    }
+                }
 
                 JedisPubSub pubSub = new JedisPubSub() {
                     @Override
@@ -138,7 +162,7 @@ public final class RedisNetworkManager implements NetworkManager {
                     }
                 };
                 this.activePubSub = pubSub;
-                subscriberJedis.subscribe(
+                subClient.subscribe(
                         pubSub,
                         redisConfig.serversChannel(),
                         redisConfig.arenasChannel(),
@@ -154,6 +178,7 @@ public final class RedisNetworkManager implements NetworkManager {
                 }
             } finally {
                 this.activePubSub = null;
+                this.subscriberJedis = null;
                 redisConnected.set(false);
             }
 
@@ -236,6 +261,13 @@ public final class RedisNetworkManager implements NetworkManager {
             } catch (Exception ignored) {
             }
         }
+        Jedis sub = this.subscriberJedis;
+        if (sub != null) {
+            try {
+                sub.close();
+            } catch (Exception ignored) {
+            }
+        }
 
         if (subscriberThread != null) {
             subscriberThread.interrupt();
@@ -266,7 +298,9 @@ public final class RedisNetworkManager implements NetworkManager {
     @Override
     public void updateLocalHeartbeat(int onlinePlayers) {
         stateStore.updateLocalHeartbeat(onlinePlayers);
-        publishServerInfoAsync(stateStore.getLocalServerInfo());
+        if (redisConnected.get()) {
+            publishServerInfoAsync(stateStore.getLocalServerInfo());
+        }
     }
 
     @Override
@@ -297,7 +331,9 @@ public final class RedisNetworkManager implements NetworkManager {
     @Override
     public void publishArenaStatus(ArenaStatusSnapshot snapshot) {
         stateStore.recordArenaSnapshot(snapshot);
-        publishAsync(redisConfig.arenasChannel(), NetworkCodec.encodeArenaSnapshot(snapshot));
+        if (redisConnected.get()) {
+            publishAsync(redisConfig.arenasChannel(), NetworkCodec.encodeArenaSnapshot(snapshot));
+        }
     }
 
     @Override
@@ -314,7 +350,9 @@ public final class RedisNetworkManager implements NetworkManager {
     public void sendMessage(NetworkMessage message) {
         Objects.requireNonNull(message, "message nesmie byť null");
         stateStore.dispatchLocally(message);
-        publishAsync(redisConfig.messagesChannel(), NetworkCodec.encodeMessage(message));
+        if (redisConnected.get()) {
+            publishAsync(redisConfig.messagesChannel(), NetworkCodec.encodeMessage(message));
+        }
     }
 
     @Override

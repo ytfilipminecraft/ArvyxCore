@@ -2,15 +2,17 @@ package sk.arvyx.core.arena;
 
 import java.time.Instant;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
 /**
- * Reprezentácia jednej hernej arény v systéme ArvyxCore.
- * Všetky prechody stavov sú vláknovo bezpečné a overované voči stavovému automatu.
+ * Reprezentácia jednej hernej arény v systéme ArvyxCore 1.1.1.
+ * Všetky prechody stavov, hráči a časovo viazané rezervácie miest sú vláknovo bezpečné.
  */
 public final class Arena {
 
@@ -28,6 +30,7 @@ public final class Arena {
 
     private final Set<UUID> players = new LinkedHashSet<>();
     private final Set<UUID> alivePlayers = new LinkedHashSet<>();
+    private final Map<UUID, Instant> reservations = new LinkedHashMap<>();
 
     private ArenaState state;
     private Instant startTime;
@@ -164,6 +167,65 @@ public final class Arena {
         return players.size() >= maxPlayers;
     }
 
+    public synchronized int pruneExpiredReservations(Instant now) {
+        Objects.requireNonNull(now, "now nesmie byť null");
+        int before = reservations.size();
+        reservations.entrySet().removeIf(entry -> !entry.getValue().isAfter(now));
+        return before - reservations.size();
+    }
+
+    public synchronized int getReservedCount(Instant now) {
+        pruneExpiredReservations(now);
+        return reservations.size();
+    }
+
+    public synchronized int getEffectivePlayerCount(Instant now) {
+        return players.size() + getReservedCount(now);
+    }
+
+    public synchronized boolean isFullIncludingReservations(Instant now) {
+        return getEffectivePlayerCount(now) >= maxPlayers;
+    }
+
+    public synchronized boolean hasValidReservation(UUID playerId, Instant now) {
+        if (playerId == null || now == null) {
+            return false;
+        }
+        pruneExpiredReservations(now);
+        return reservations.containsKey(playerId);
+    }
+
+    /**
+     * Rezervuje miesto v aréne pre hráča presúvaného zo vzdialeného servera cez Velocity.
+     */
+    public synchronized boolean reserveSlot(UUID playerId, Instant expiresAt, Instant now) {
+        Objects.requireNonNull(playerId, "playerId nesmie byť null");
+        Objects.requireNonNull(expiresAt, "expiresAt nesmie byť null");
+        Objects.requireNonNull(now, "now nesmie byť null");
+        pruneExpiredReservations(now);
+
+        if (!state.isJoinable() || players.contains(playerId) || !expiresAt.isAfter(now)) {
+            return false;
+        }
+        if (reservations.containsKey(playerId)) {
+            reservations.put(playerId, expiresAt);
+            return true;
+        }
+        if (isFullIncludingReservations(now)) {
+            return false;
+        }
+        reservations.put(playerId, expiresAt);
+        return true;
+    }
+
+    public synchronized boolean consumeReservation(UUID playerId, Instant now) {
+        if (playerId == null || now == null) {
+            return false;
+        }
+        pruneExpiredReservations(now);
+        return reservations.remove(playerId) != null;
+    }
+
     public synchronized boolean hasMinimumPlayers() {
         return players.size() >= minPlayers;
     }
@@ -181,14 +243,19 @@ public final class Arena {
         if (target == ArenaState.INGAME) {
             this.startTime = Instant.now();
             this.endTime = null;
+            this.reservations.clear();
             this.alivePlayers.clear();
             this.alivePlayers.addAll(this.players);
         } else if (target == ArenaState.ENDING) {
             this.endTime = Instant.now();
+            this.reservations.clear();
         } else if (target == ArenaState.WAITING) {
             this.startTime = null;
             this.endTime = null;
+            this.reservations.clear();
             this.alivePlayers.clear();
+        } else if (target == ArenaState.DISABLED || target == ArenaState.RESETTING) {
+            this.reservations.clear();
         }
         return true;
     }
@@ -206,7 +273,12 @@ public final class Arena {
 
     public synchronized boolean addPlayer(UUID playerId) {
         Objects.requireNonNull(playerId, "UUID hráča nesmie byť null");
-        if (!state.isJoinable() || isFull() || players.contains(playerId)) {
+        Instant now = Instant.now();
+        boolean hadReservation = consumeReservation(playerId, now);
+        if (!state.isJoinable() || players.contains(playerId)) {
+            return false;
+        }
+        if (hadReservation ? isFull() : isFullIncludingReservations(now)) {
             return false;
         }
         return players.add(playerId);
@@ -216,6 +288,7 @@ public final class Arena {
         if (playerId == null) {
             return false;
         }
+        reservations.remove(playerId);
         alivePlayers.remove(playerId);
         return players.remove(playerId);
     }
@@ -230,6 +303,7 @@ public final class Arena {
     public synchronized void clearSessionData() {
         players.clear();
         alivePlayers.clear();
+        reservations.clear();
         startTime = null;
         endTime = null;
     }

@@ -94,4 +94,39 @@ class NetworkSyncAndRedisTest {
 
         assertDoesNotThrow(manager::shutdown);
     }
+
+    @Test
+    void routesIncomingPubSubDirectTransferRequestAndIgnoresSelfMessages() {
+        Logger logger = Logger.createFallback("PubSubRoutingTest");
+        RedisConfig cfg = new RedisConfig(false, "127.0.0.1", 6379, false, 1000, "", "arvyx:test", 30);
+        RedisNetworkManager manager = new RedisNetworkManager(logger, "skyrush-1", "SKYRUSH", "SkyRush #1", cfg);
+        manager.initialize();
+        manager.setOnReconnectCallback(() -> {});
+
+        AtomicReference<NetworkMessage> received = new AtomicReference<>();
+        manager.registerHandler(NetworkMessageType.PLAYER_TRANSFER_REQUEST, received::set);
+
+        NetworkMessage fromLobby = NetworkMessage.direct(
+                NetworkMessageType.PLAYER_TRANSFER_REQUEST,
+                "lobby",
+                "skyrush-1",
+                Map.of("arenaId", "skyrush-1a", "playerUuid", "00000000-0000-0000-0000-000000000001")
+        );
+        manager.handleIncomingPubSubMessage(cfg.messagesChannel(), NetworkCodec.encodeMessage(fromLobby));
+        assertNotNull(received.get());
+        assertEquals("skyrush-1a", received.get().getPayloadValue("arenaId"));
+
+        // Správa s vlastným sourceServerId sa musí ignorovať pri spätnom Pub/Sub doručení
+        received.set(null);
+        NetworkMessage echoSelf = NetworkMessage.direct(
+                NetworkMessageType.PLAYER_TRANSFER_REQUEST,
+                "skyrush-1",
+                "skyrush-1",
+                Map.of("arenaId", "skyrush-1a")
+        );
+        manager.handleIncomingPubSubMessage(cfg.messagesChannel(), NetworkCodec.encodeMessage(echoSelf));
+        assertNull(received.get());
+
+        manager.shutdown();
+    }
 }

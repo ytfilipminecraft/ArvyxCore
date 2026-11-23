@@ -4,17 +4,20 @@ import com.google.common.io.ByteArrayDataOutput;
 import com.google.common.io.ByteStreams;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
+import org.bukkit.NamespacedKey;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.potion.PotionEffect;
+import org.bukkit.util.Vector;
 import sk.arvyx.core.arena.Arena;
 import sk.arvyx.core.arena.ArenaLocation;
 import sk.arvyx.core.arena.ArenaManager;
 import sk.arvyx.core.util.Logger;
 import sk.arvyx.core.util.MessageFormatter;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -26,7 +29,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Správca hráčov pracujúci s UUID ako primárnym identifikátorom.
- * Chráni pred duplicitným priradením hráča do viacerých arén a rieši bezpečný návrat na lobby.
+ * Chráni pred duplicitným priradením hráča do viacerých arén, čistí odpojených hráčov
+ * (ochrana proti úniku pamäte) a zabezpečuje návrat na lobby cez Velocity.
  */
 public final class PlayerManager {
 
@@ -99,15 +103,13 @@ public final class PlayerManager {
             return;
         }
         removePlayerFromArena(uuid);
-        PlayerData data = playerDataMap.get(uuid);
-        if (data != null) {
-            data.setAlive(false);
-            data.setCurrentArenaId(null);
-        }
+        // Odstránenie offline hráča z mapy zabraňuje postupnému úniku pamäte
+        playerDataMap.remove(uuid);
     }
 
     /**
-     * Bezpečne priradí hráča do arény. Zabraňuje duplicitnému priradeniu do viacerých arén.
+     * Bezpečne priradí hráča do arény. Zabraňuje duplicitnému priradeniu do viacerých arén
+     * a zohľadňuje aktívne rezervácie ostatných hráčov.
      */
     public synchronized JoinResult assignPlayerToArena(UUID uuid, Arena targetArena) {
         Objects.requireNonNull(uuid, "UUID nesmie byť null");
@@ -122,7 +124,6 @@ public final class PlayerManager {
             return JoinResult.ALREADY_IN_OTHER_ARENA;
         }
 
-        // Dodatočná ochrana cez ArenaManager pre prípad nekonzistentného stavu
         if (arenaManager.findArenaByPlayer(uuid).isPresent()) {
             return JoinResult.ALREADY_IN_OTHER_ARENA;
         }
@@ -130,7 +131,9 @@ public final class PlayerManager {
         if (!targetArena.getState().isJoinable()) {
             return JoinResult.ARENA_NOT_JOINABLE;
         }
-        if (targetArena.isFull()) {
+        Instant now = Instant.now();
+        boolean hasReservation = targetArena.hasValidReservation(uuid, now);
+        if (hasReservation ? targetArena.isFull() : targetArena.isFullIncludingReservations(now)) {
             return JoinResult.ARENA_FULL;
         }
         if (!targetArena.addPlayer(uuid)) {
@@ -195,7 +198,7 @@ public final class PlayerManager {
     }
 
     /**
-     * Obnoví čistý herný stav hráča bez zostatkových efektov alebo upravenej gravitácie.
+     * Obnoví čistý herný stav hráča bez zostatkových efektov, upravenej gravitácie alebo pádu.
      */
     public void restoreCleanPlayerState(Player player) {
         if (player == null || !player.isOnline()) {
@@ -209,10 +212,11 @@ public final class PlayerManager {
         }
         AttributeInstance gravity = player.getAttribute(Attribute.GRAVITY);
         if (gravity != null && plugin != null) {
-            gravity.removeModifier(new org.bukkit.NamespacedKey(plugin, "chaos_low_gravity"));
+            gravity.removeModifier(new NamespacedKey(plugin, "chaos_low_gravity"));
         }
         player.setFireTicks(0);
         player.setFallDistance(0.0f);
+        player.setVelocity(new Vector(0, 0, 0));
         player.setFoodLevel(20);
         player.setSaturation(20.0f);
         AttributeInstance maxHealth = player.getAttribute(Attribute.MAX_HEALTH);

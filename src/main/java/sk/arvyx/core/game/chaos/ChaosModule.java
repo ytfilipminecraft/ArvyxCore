@@ -57,12 +57,6 @@ public final class ChaosModule implements GameModule {
     private final ChaosEventManager eventManager;
     private final StreamEventBridge streamEventBridge;
 
-    private final LowGravityEvent lowGravityEvent = new LowGravityEvent();
-    private final KnockbackStickEvent knockbackStickEvent = new KnockbackStickEvent();
-    private final TntRainEvent tntRainEvent = new TntRainEvent();
-    private final SpeedBoostEvent speedBoostEvent = new SpeedBoostEvent();
-    private final ChaosFogEvent chaosFogEvent = new ChaosFogEvent();
-
     private final Map<String, ChaosMatchSession> matchSessions = new ConcurrentHashMap<>();
     private Supplier<ResetManager> resetManagerSupplier;
 
@@ -149,12 +143,6 @@ public final class ChaosModule implements GameModule {
         eventManager.setMaxConcurrentEvents(maxConcurrent);
         streamEventBridge.setStreamingEnabled(cfg.getBoolean("chaos.streaming.enabled", false));
 
-        applyEventSettings(cfg, lowGravityEvent);
-        applyEventSettings(cfg, knockbackStickEvent);
-        applyEventSettings(cfg, tntRainEvent);
-        applyEventSettings(cfg, speedBoostEvent);
-        applyEventSettings(cfg, chaosFogEvent);
-
         // Synchronizácia s registrovanými udalosťami v eventManageri
         eventManager.getEvent(LowGravityEvent.ID).ifPresent(e -> applyEventSettings(cfg, e));
         eventManager.getEvent(KnockbackStickEvent.ID).ifPresent(e -> applyEventSettings(cfg, e));
@@ -185,6 +173,7 @@ public final class ChaosModule implements GameModule {
                     tr.setTntPerWave(tntSec.getInt("tnt-per-wave", 3));
                     tr.setSpawnHeight(tntSec.getDouble("spawn-height", 14.0));
                     tr.setSpreadRadius(tntSec.getDouble("spread-radius", 16.0));
+                    tr.setSpawnIntervalTicks(tntSec.getInt("spawn-interval-ticks", 20));
                 }
             });
         }
@@ -252,7 +241,10 @@ public final class ChaosModule implements GameModule {
             }
         }
 
-        ChaosMatchSession session = new ChaosMatchSession(arena, arena.getMatchDurationSeconds(), randomEventIntervalSeconds);
+        int duration = arena.getMatchDurationSeconds() > 0
+                ? arena.getMatchDurationSeconds()
+                : Math.max(30, configManager.getChaosConfig().getInt("chaos.match-duration-seconds", 300));
+        ChaosMatchSession session = new ChaosMatchSession(arena, duration, randomEventIntervalSeconds);
         matchSessions.put(key, session);
 
         if (plugin.isEnabled()) {
@@ -350,7 +342,9 @@ public final class ChaosModule implements GameModule {
         }
         Player victim = Bukkit.getPlayer(victimId);
         if (victim != null && victim.isOnline()) {
+            playerManager.restoreCleanPlayerState(victim);
             victim.setGameMode(GameMode.SPECTATOR);
+            arena.getLobbySpawn().toBukkitLocation().ifPresent(victim::teleport);
         }
         if (arena.getAliveCount() <= 1) {
             concludeMatch(arena);
@@ -384,12 +378,22 @@ public final class ChaosModule implements GameModule {
         }
 
         Optional<UUID> winnerId = arena.getAlivePlayers().stream().findFirst();
-        String winnerName = winnerId
-                .flatMap(id -> playerManager.getPlayerData(id).map(PlayerData::getLastKnownName))
-                .orElse("Nikto");
-
-        winnerId.flatMap(playerManager::getPlayerData).ifPresent(PlayerData::incrementWins);
-        broadcastArena(arena, configManager.getMessage("chaos.winner"), Map.of("winner", winnerName));
+        if (winnerId.isPresent()) {
+            UUID id = winnerId.get();
+            playerManager.getPlayerData(id).ifPresent(PlayerData::incrementWins);
+            String winnerName = playerManager.getPlayerData(id)
+                    .map(PlayerData::getLastKnownName)
+                    .orElse("Víťaz");
+            broadcastArena(arena, configManager.getMessage("chaos.winner"), Map.of("winner", winnerName));
+            for (UUID uuid : arena.getPlayers()) {
+                Player player = Bukkit.getPlayer(uuid);
+                if (player != null && player.isOnline()) {
+                    player.playSound(player.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 1.0f);
+                }
+            }
+        } else {
+            broadcastArena(arena, configManager.getMessage("chaos.no-winner"), Map.of());
+        }
 
         networkManager.publishArenaStatus(ArenaStatusSnapshot.fromArena(configManager.getServerId(), arena));
         if (resetManagerSupplier != null && resetManagerSupplier.get() != null) {

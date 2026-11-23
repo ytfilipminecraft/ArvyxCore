@@ -23,7 +23,7 @@ import java.util.function.Consumer;
 
 /**
  * Správca odpočítavania pred štartom zápasu.
- * Zabraňuje duplicitným úlohám, upozorňuje hráčov a ruší odpočítavanie pri poklese hráčov pod minimum.
+ * Zabraňuje duplicitným úlohám a race conditions, upozorňuje hráčov a ruší odpočítavanie pri poklese pod minimum.
  */
 public final class CountdownManager {
 
@@ -75,31 +75,31 @@ public final class CountdownManager {
     }
 
     /**
-     * Spustí odpočítavanie pre arénu na Paper serveri. Zabraňuje duplicitným úlohám.
+     * Atomicky spustí odpočítavanie pre arénu. Zabraňuje duplicitným úlohám aj súbežným štartom.
      */
     public boolean startCountdown(Arena arena, Consumer<Arena> onComplete) {
         Objects.requireNonNull(arena, "Aréna nesmie byť null");
         Objects.requireNonNull(onComplete, "onComplete callback nesmie byť null");
 
         String key = normalizeKey(arena.getId());
-        if (sessions.containsKey(key)) {
-            logger.debug("Odpočítavanie pre arénu '" + arena.getId() + "' už beží — duplicitný štart zamietnutý.");
-            return false;
-        }
-        if (!arena.hasMinimumPlayers()) {
-            return false;
-        }
-        if (arena.getState() == ArenaState.WAITING && !arena.transitionTo(ArenaState.STARTING)) {
-            return false;
-        }
-        if (arena.getState() != ArenaState.STARTING) {
-            return false;
-        }
+        CountdownSession session;
+        synchronized (arena) {
+            if (sessions.containsKey(key)) {
+                logger.debug("Odpočítavanie pre arénu '" + arena.getId() + "' už beží — duplicitný štart zamietnutý.");
+                return false;
+            }
+            if (!arena.hasMinimumPlayers()) {
+                return false;
+            }
+            if (arena.getState() == ArenaState.WAITING && !arena.transitionTo(ArenaState.STARTING)) {
+                return false;
+            }
+            if (arena.getState() != ArenaState.STARTING) {
+                return false;
+            }
 
-        CountdownSession session = new CountdownSession(arena, arena.getCountdownSeconds(), onComplete);
-        CountdownSession previous = sessions.putIfAbsent(key, session);
-        if (previous != null) {
-            return false;
+            session = new CountdownSession(arena, arena.getCountdownSeconds(), onComplete);
+            sessions.put(key, session);
         }
 
         if (plugin != null && plugin.isEnabled()) {
@@ -107,8 +107,6 @@ public final class CountdownManager {
                 TickOutcome outcome = tickSession(arena.getId());
                 if (outcome == TickOutcome.CANCELLED_LOW_PLAYERS) {
                     notifyArena(arena, cancelledLowPlayersMessage, Map.of(), Sound.BLOCK_NOTE_BLOCK_BASS, 0.8f);
-                } else if (outcome == TickOutcome.STARTED) {
-                    notifyArena(arena, startedMessage, Map.of(), Sound.ENTITY_ENDER_DRAGON_GROWL, 1.0f);
                 }
             }, 0L, 20L);
             session.setTask(task);
@@ -125,50 +123,56 @@ public final class CountdownManager {
         if (arenaId == null) {
             return TickOutcome.NO_SESSION;
         }
-        CountdownSession session = sessions.get(normalizeKey(arenaId));
+        String key = normalizeKey(arenaId);
+        CountdownSession session = sessions.get(key);
         if (session == null) {
             return TickOutcome.NO_SESSION;
         }
         Arena arena = session.arena;
 
-        if (arena.getState() != ArenaState.STARTING) {
-            cancelCountdown(arenaId, false);
-            return TickOutcome.CANCELLED_INVALID_STATE;
-        }
-
-        if (!arena.hasMinimumPlayers()) {
-            cancelCountdown(arenaId, true);
-            logger.info("Odpočítavanie arény '" + arena.getId() + "' zrušené pre nedostatok hráčov ("
-                    + arena.getCurrentPlayerCount() + "/" + arena.getMinPlayers() + ").");
-            return TickOutcome.CANCELLED_LOW_PLAYERS;
-        }
-
-        int secondsLeft = session.remainingSeconds;
-        if (secondsLeft <= 0) {
-            sessions.remove(normalizeKey(arenaId));
-            session.cancelTask();
-            if (arena.transitionTo(ArenaState.INGAME)) {
-                session.onComplete.accept(arena);
-                return TickOutcome.STARTED;
+        synchronized (arena) {
+            if (arena.getState() != ArenaState.STARTING) {
+                cancelCountdown(arenaId, false);
+                return TickOutcome.CANCELLED_INVALID_STATE;
             }
-            return TickOutcome.CANCELLED_INVALID_STATE;
-        }
 
-        if (notifyIntervals.contains(secondsLeft) || secondsLeft == arena.getCountdownSeconds()) {
-            if (plugin != null && plugin.isEnabled()) {
-                float pitch = secondsLeft <= 3 ? 1.5f : 1.1f;
-                notifyArena(
-                        arena,
-                        tickMessage,
-                        Map.of("seconds", String.valueOf(secondsLeft)),
-                        Sound.BLOCK_NOTE_BLOCK_PLING,
-                        pitch
-                );
+            if (!arena.hasMinimumPlayers()) {
+                cancelCountdown(arenaId, true);
+                logger.info("Odpočítavanie arény '" + arena.getId() + "' zrušené pre nedostatok hráčov ("
+                        + arena.getCurrentPlayerCount() + "/" + arena.getMinPlayers() + ").");
+                return TickOutcome.CANCELLED_LOW_PLAYERS;
             }
-        }
 
-        session.remainingSeconds--;
-        return TickOutcome.TICKED;
+            int secondsLeft = session.remainingSeconds;
+            if (secondsLeft <= 0) {
+                sessions.remove(key);
+                session.cancelTask();
+                if (arena.transitionTo(ArenaState.INGAME)) {
+                    if (plugin != null && plugin.isEnabled()) {
+                        notifyArena(arena, startedMessage, Map.of(), Sound.ENTITY_ENDER_DRAGON_GROWL, 1.0f);
+                    }
+                    session.onComplete.accept(arena);
+                    return TickOutcome.STARTED;
+                }
+                return TickOutcome.CANCELLED_INVALID_STATE;
+            }
+
+            if (notifyIntervals.contains(secondsLeft) || secondsLeft == arena.getCountdownSeconds()) {
+                if (plugin != null && plugin.isEnabled()) {
+                    float pitch = secondsLeft <= 3 ? 1.5f : 1.1f;
+                    notifyArena(
+                            arena,
+                            tickMessage,
+                            Map.of("seconds", String.valueOf(secondsLeft)),
+                            Sound.BLOCK_NOTE_BLOCK_PLING,
+                            pitch
+                    );
+                }
+            }
+
+            session.remainingSeconds--;
+            return TickOutcome.TICKED;
+        }
     }
 
     public boolean isCountingDown(String arenaId) {

@@ -11,14 +11,18 @@ import sk.arvyx.core.countdown.CountdownManager;
 import sk.arvyx.core.game.GameManager;
 import sk.arvyx.core.network.ArenaStatusSnapshot;
 import sk.arvyx.core.network.LocalNetworkManager;
+import sk.arvyx.core.network.NetworkMessage;
+import sk.arvyx.core.network.NetworkMessageType;
 import sk.arvyx.core.network.ServerInfo;
 import sk.arvyx.core.player.PlayerManager;
 import sk.arvyx.core.util.Logger;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -130,5 +134,73 @@ class MatchmakingTest {
         assertTrue(remote.isPresent());
         assertEquals("chaos-1", remote.get().serverId());
         assertEquals("chaos-1a", remote.get().arenaId());
+    }
+
+    @Test
+    void reservesRemoteTransferWithoutOverbookingAndRollsBackOnCancel() {
+        Instant now = Instant.now();
+        networkManager.registerServer(new ServerInfo("chaos-1", "CHAOS", "Chaos #1", 1, now, true));
+        networkManager.publishArenaStatus(new ArenaStatusSnapshot(
+                "chaos-1a", "chaos-1", ArenaType.CHAOS, ArenaState.WAITING, 1, 2, now
+        ));
+
+        UUID p1 = UUID.randomUUID();
+        UUID p2 = UUID.randomUUID();
+
+        // Prvý hráč obsadí posledné voľné miesto (1 + 1 = 2)
+        Optional<ArenaStatusSnapshot> reserved1 = matchmakingManager.reserveRemoteTransfer(p1, ArenaType.CHAOS, now);
+        assertTrue(reserved1.isPresent());
+        assertEquals("chaos-1a", reserved1.get().arenaId());
+
+        // Druhý hráč už nesmie prebookovať kapacitu
+        Optional<ArenaStatusSnapshot> reserved2 = matchmakingManager.reserveRemoteTransfer(p2, ArenaType.CHAOS, now);
+        assertTrue(reserved2.isEmpty());
+
+        // Zrušenie rezervácie (napr. pri zlyhaní presunu) uvoľní miesto
+        matchmakingManager.cancelOutboundReservation(p1);
+        Optional<ArenaStatusSnapshot> reservedAfterCancel = matchmakingManager.reserveRemoteTransfer(p2, ArenaType.CHAOS, now);
+        assertTrue(reservedAfterCancel.isPresent());
+
+        // Po expirácii TTL sa rezervácia automaticky vyčistí
+        int cleaned = matchmakingManager.cleanupExpiredReservations(now.plusSeconds(MatchmakingManager.RESERVATION_TTL_SECONDS + 1));
+        assertEquals(1, cleaned);
+    }
+
+    @Test
+    void handlesIncomingReservationRequestAndProtectsSlotForReservedPlayer() {
+        Arena backendArena = createArena("skyrush-1a", ArenaType.SKYRUSH, 1, 2, true);
+        arenaManager.registerArena(backendArena);
+
+        UUID localPlayer = UUID.randomUUID();
+        UUID reservedRemotePlayer = UUID.randomUUID();
+        UUID unreservedPlayer = UUID.randomUUID();
+
+        assertEquals(MatchmakingManager.MatchmakingResult.Status.JOINED_LOCAL,
+                matchmakingManager.assignToSpecificLocalArena(localPlayer, backendArena).status());
+
+        Instant exp = Instant.now().plusSeconds(15);
+        NetworkMessage transferMsg = NetworkMessage.direct(
+                NetworkMessageType.PLAYER_TRANSFER_REQUEST,
+                "lobby",
+                "skyrush-1",
+                Map.of(
+                        "playerUuid", reservedRemotePlayer.toString(),
+                        "arenaId", "skyrush-1a",
+                        "expiresAtEpochMs", String.valueOf(exp.toEpochMilli())
+                )
+        );
+        AtomicReference<NetworkMessage> dispatched = new AtomicReference<>(transferMsg);
+        assertTrue(matchmakingManager.handleIncomingReservationRequest(dispatched.get()));
+        assertTrue(backendArena.hasValidReservation(reservedRemotePlayer, Instant.now()));
+
+        // Nerezervovaný hráč nesmie obsadiť posledné rezervované miesto
+        assertEquals(MatchmakingManager.MatchmakingResult.Status.NO_ARENA_AVAILABLE,
+                matchmakingManager.assignToBestLocalArena(unreservedPlayer, ArenaType.SKYRUSH).status());
+
+        // Rezervovaný hráč miesto bez problémov obsadí a rezervácia sa spotrebuje
+        assertEquals(MatchmakingManager.MatchmakingResult.Status.JOINED_LOCAL,
+                matchmakingManager.assignToSpecificLocalArena(reservedRemotePlayer, backendArena).status());
+        assertFalse(backendArena.hasValidReservation(reservedRemotePlayer, Instant.now()));
+        assertEquals(2, backendArena.getCurrentPlayerCount());
     }
 }

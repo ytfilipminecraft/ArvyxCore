@@ -132,6 +132,7 @@ public final class LowGravityEvent implements ChaosEvent {
                 if (gravity != null) {
                     gravity.removeModifier(key);
                 }
+                player.setFallDistance(0.0f);
             }
         }
     }

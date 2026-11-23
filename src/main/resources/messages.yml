@@ -62,8 +62,10 @@ skyrush:
   eliminated: "<prefix> <#94A3B8>Hráč <#E2E8F0><player> <#94A3B8>bol eliminovaný. Zostáva <#C084FC><remaining> <#94A3B8>hráčov."
   winner: "<prefix> <gradient:#8A2BE2:#4169E1><bold>VÍŤAZ SKYRUSH:</bold></gradient> <#E2E8F0><winner> <#94A3B8>(<kills> zabití)"
   time-limit-winner: "<prefix> <#60A5FA>Časový limit vypršal! Víťazom sa stáva <#E2E8F0><winner><#60A5FA>."
+  no-winner: "<prefix> <#94A3B8>Zápas SkyRush skončil bez víťaza."
 
 chaos:
   event-activated: "<prefix> <gradient:#A855F7:#60A5FA><bold>CHAOS UDALOSŤ:</bold></gradient> <#E2E8F0><event_name> <#94A3B8>(<duration>s) — <description>"
   event-ended: "<prefix> <#94A3B8>Chaos udalosť <#C084FC><event_name> <#94A3B8>skončila."
   winner: "<prefix> <gradient:#8A2BE2:#4169E1><bold>VÍŤAZ CHAOS:</bold></gradient> <#E2E8F0><winner>"
+  no-winner: "<prefix> <#94A3B8>Zápas Chaos skončil bez víťaza."

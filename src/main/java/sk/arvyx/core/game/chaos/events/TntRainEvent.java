@@ -31,6 +31,7 @@ public final class TntRainEvent implements ChaosEvent {
     private int tntPerWave = 3;
     private double spawnHeight = 14.0;
     private double spreadRadius = 16.0;
+    private int spawnIntervalSeconds = 1;
 
     @Override
     public String getId() {
@@ -115,6 +116,14 @@ public final class TntRainEvent implements ChaosEvent {
         this.spreadRadius = Math.clamp(spreadRadius, 2.0, 50.0);
     }
 
+    public int getSpawnIntervalSeconds() {
+        return spawnIntervalSeconds;
+    }
+
+    public void setSpawnIntervalTicks(int ticks) {
+        this.spawnIntervalSeconds = Math.max(1, Math.round(ticks / 20.0f));
+    }
+
     @Override
     public void onActivate(Arena arena, ChaosEventContext context) {
         spawnWave(arena, context);
@@ -122,7 +131,9 @@ public final class TntRainEvent implements ChaosEvent {
 
     @Override
     public void onTick(Arena arena, ChaosEventContext context, int remainingSeconds) {
-        spawnWave(arena, context);
+        if (remainingSeconds % spawnIntervalSeconds == 0) {
+            spawnWave(arena, context);
+        }
     }
 
     private void spawnWave(Arena arena, ChaosEventContext context) {

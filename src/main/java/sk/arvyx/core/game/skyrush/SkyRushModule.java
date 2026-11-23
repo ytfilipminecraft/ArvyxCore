@@ -19,6 +19,7 @@ import sk.arvyx.core.network.ArenaStatusSnapshot;
 import sk.arvyx.core.network.NetworkManager;
 import sk.arvyx.core.player.PlayerData;
 import sk.arvyx.core.player.PlayerManager;
+import sk.arvyx.core.reset.ArenaBlockTracker;
 import sk.arvyx.core.reset.ResetManager;
 import sk.arvyx.core.util.Logger;
 import sk.arvyx.core.util.MessageFormatter;
@@ -35,7 +36,6 @@ import java.util.function.Supplier;
 
 /**
  * Herný modul SkyRush — rýchly ostrovný PvP režim (3-5 minút) s loot truhlicami a Supply Dropmi.
- * Úplne izolovaný od ostatných herných režimov.
  */
 public final class SkyRushModule implements GameModule {
 
@@ -49,6 +49,7 @@ public final class SkyRushModule implements GameModule {
 
     private final Map<String, SkyRushMatchSession> sessions = new ConcurrentHashMap<>();
     private Supplier<ResetManager> resetManagerSupplier;
+    private ArenaBlockTracker blockTracker;
     private volatile SkyRushConfig skyRushConfig;
 
     public SkyRushModule(
@@ -70,6 +71,10 @@ public final class SkyRushModule implements GameModule {
 
     public void setResetManagerSupplier(Supplier<ResetManager> resetManagerSupplier) {
         this.resetManagerSupplier = resetManagerSupplier;
+    }
+
+    public void setBlockTracker(ArenaBlockTracker blockTracker) {
+        this.blockTracker = blockTracker;
     }
 
     @Override
@@ -116,7 +121,6 @@ public final class SkyRushModule implements GameModule {
             logger.warn("Svet '" + arena.getWorldName() + "' pre SkyRush arénu '" + arena.getId() + "' nie je načítaný.");
         }
 
-        // Rozmiestnenie hráčov na ostrovy a štartovací kit
         List<ArenaLocation> islands = arena.getSpawnPoints();
         int idx = 0;
         for (UUID uuid : arena.getPlayers()) {
@@ -136,11 +140,12 @@ public final class SkyRushModule implements GameModule {
             }
         }
 
-        // Naplnenie ostrovných a centrálnych truhlíc
         int chestCount = lootManager.populateArenaChests(arena, cfg);
         logger.debug("Naplnených " + chestCount + " truhlíc v SkyRush aréne '" + arena.getId() + "'.");
 
-        int duration = Math.min(arena.getMatchDurationSeconds(), cfg.getMatchDurationSeconds());
+        int duration = arena.getMatchDurationSeconds() > 0
+                ? arena.getMatchDurationSeconds()
+                : cfg.getMatchDurationSeconds();
         SkyRushMatchSession session = new SkyRushMatchSession(
                 arena,
                 duration,
@@ -178,7 +183,6 @@ public final class SkyRushModule implements GameModule {
             return;
         }
 
-        // 1. Ochranná lehota na začiatku zápasu
         if (session.graceRemainingSeconds > 0) {
             session.graceRemainingSeconds--;
             if (session.graceRemainingSeconds == 0) {
@@ -187,7 +191,6 @@ public final class SkyRushModule implements GameModule {
             }
         }
 
-        // 2. Kontrola pádu do prázdna (Void check)
         for (UUID uuid : arena.getAlivePlayers()) {
             Player player = Bukkit.getPlayer(uuid);
             if (player != null && player.isOnline()
@@ -201,7 +204,6 @@ public final class SkyRushModule implements GameModule {
             return;
         }
 
-        // 3. Doplnenie truhlíc
         session.secondsUntilChestRefill--;
         if (session.secondsUntilChestRefill <= 0) {
             session.secondsUntilChestRefill = cfg.getChestRefillSeconds();
@@ -210,17 +212,15 @@ public final class SkyRushModule implements GameModule {
             playArenaSound(arena, Sound.BLOCK_CHEST_OPEN, 1.2f);
         }
 
-        // 4. Supply drop na strede mapy
         session.secondsUntilSupplyDrop--;
         if (session.secondsUntilSupplyDrop <= 0) {
             session.secondsUntilSupplyDrop = cfg.getSupplyDropIntervalSeconds();
-            if (lootManager.spawnSupplyDrop(arena, cfg)) {
+            if (lootManager.spawnSupplyDrop(arena, cfg, blockTracker)) {
                 broadcastArena(arena, configManager.getMessage("skyrush.supply-drop"), Map.of());
                 playArenaSound(arena, Sound.ENTITY_ENDER_DRAGON_GROWL, 1.2f);
             }
         }
 
-        // 5. Časový limit a vyhodnotenie víťaza
         session.remainingMatchSeconds--;
         if (arena.getAliveCount() <= 1) {
             concludeMatch(arena, false);
@@ -264,6 +264,7 @@ public final class SkyRushModule implements GameModule {
                 : playerManager.getPlayerData(victimId).map(PlayerData::getLastKnownName).orElse("Neznámy");
 
         if (victim != null && victim.isOnline()) {
+            playerManager.restoreCleanPlayerState(victim);
             victim.setGameMode(GameMode.SPECTATOR);
             arena.getLobbySpawn().toBukkitLocation().ifPresent(victim::teleport);
         }
@@ -280,8 +281,12 @@ public final class SkyRushModule implements GameModule {
 
     @Override
     public void onPlayerQuit(Arena arena, UUID playerId) {
-        if (arena.getState() == ArenaState.INGAME && arena.isPlayerAlive(playerId)) {
-            onPlayerEliminate(arena, playerId, null);
+        if (arena.getState() != ArenaState.INGAME) {
+            return;
+        }
+        arena.markEliminated(playerId);
+        if (arena.getAliveCount() <= 1) {
+            concludeMatch(arena, false);
         }
     }
 
@@ -318,6 +323,8 @@ public final class SkyRushModule implements GameModule {
                     "kills", String.valueOf(kills)
             ));
             playArenaSound(arena, Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f);
+        } else {
+            broadcastArena(arena, configManager.getMessage("skyrush.no-winner"), Map.of());
         }
 
         networkManager.publishArenaStatus(ArenaStatusSnapshot.fromArena(configManager.getServerId(), arena));

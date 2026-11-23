@@ -142,6 +142,11 @@ public final class KnockbackStickEvent implements ChaosEvent {
                         player.getInventory().setItem(i, null);
                     }
                 }
+                ItemStack cursor = player.getItemOnCursor();
+                if (cursor.hasItemMeta()
+                        && cursor.getItemMeta().getPersistentDataContainer().has(key, PersistentDataType.BYTE)) {
+                    player.setItemOnCursor(null);
+                }
             }
         }
     }

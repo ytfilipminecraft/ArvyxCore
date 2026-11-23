@@ -109,5 +109,18 @@ class ChaosEventRegistryTest {
         assertEquals(ChaosEventManager.TriggerResult.EVENT_DISABLED, bridge.handleTrigger(req));
         bridge.setStreamingEnabled(true);
         assertEquals(ChaosEventManager.TriggerResult.ACTIVATED, bridge.handleTrigger(req));
+
+        TntRainEvent tnt = (TntRainEvent) eventManager.getEvent(TntRainEvent.ID).orElseThrow();
+        tnt.setSpawnIntervalTicks(40);
+        assertEquals(2, tnt.getSpawnIntervalSeconds());
+
+        assertFalse(chaosArena.reserveSlot(java.util.UUID.randomUUID(), Instant.now().plusSeconds(15), Instant.now()));
+        assertTrue(chaosArena.transitionTo(ArenaState.ENDING));
+        assertTrue(chaosArena.transitionTo(ArenaState.RESETTING));
+        assertTrue(chaosArena.transitionTo(ArenaState.WAITING));
+        assertTrue(chaosArena.reserveSlot(java.util.UUID.randomUUID(), Instant.now().plusSeconds(15), Instant.now()));
+        assertEquals(1, chaosArena.getReservedCount(Instant.now()));
+        chaosArena.clearSessionData();
+        assertEquals(0, chaosArena.getReservedCount(Instant.now()));
     }
 }

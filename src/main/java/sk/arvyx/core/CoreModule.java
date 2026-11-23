@@ -13,12 +13,14 @@ import sk.arvyx.core.config.ConfigManager;
 import sk.arvyx.core.countdown.CountdownManager;
 import sk.arvyx.core.game.GameManager;
 import sk.arvyx.core.game.chaos.ChaosModule;
+import sk.arvyx.core.game.chaos.StreamTriggerRequest;
 import sk.arvyx.core.game.skyrush.SkyRushModule;
 import sk.arvyx.core.listener.ArenaBlockListener;
 import sk.arvyx.core.listener.PlayerLifecycleListener;
 import sk.arvyx.core.matchmaking.MatchmakingManager;
 import sk.arvyx.core.network.ArenaStatusSnapshot;
 import sk.arvyx.core.network.NetworkManager;
+import sk.arvyx.core.network.NetworkMessageType;
 import sk.arvyx.core.network.RedisConfig;
 import sk.arvyx.core.network.RedisNetworkManager;
 import sk.arvyx.core.player.PlayerManager;
@@ -151,10 +153,11 @@ public final class CoreModule {
                 worldBackupManager,
                 logger
         );
+        skyRushModule.setBlockTracker(blockTracker);
         skyRushModule.setResetManagerSupplier(() -> this.resetManager);
         chaosModule.setResetManagerSupplier(() -> this.resetManager);
 
-        // 7. Matchmaking
+        // 7. Matchmaking a spracovanie sieťových správ
         this.matchmakingManager = new MatchmakingManager(
                 configManager.getServerId(),
                 arenaManager,
@@ -165,6 +168,8 @@ public final class CoreModule {
                 logger
         );
         this.matchmakingManager.attachRuntime(configManager, messageFormatter);
+
+        registerNetworkHandlers(chaosModule);
 
         gameManager.enableAll();
 
@@ -286,12 +291,61 @@ public final class CoreModule {
         }
     }
 
+    private void registerNetworkHandlers(ChaosModule chaosModule) {
+        networkManager.registerHandler(NetworkMessageType.PLAYER_TRANSFER_REQUEST, msg -> {
+            String target = msg.getTargetServerId();
+            if (target == null || target.isBlank()
+                    || target.equalsIgnoreCase(configManager.getServerId())) {
+                matchmakingManager.handleIncomingReservationRequest(msg);
+            }
+        });
+
+        networkManager.registerHandler(NetworkMessageType.CHAOS_STREAM_TRIGGER, msg -> {
+            String target = msg.getTargetServerId();
+            if (target != null && !target.isBlank()
+                    && !target.equalsIgnoreCase(configManager.getServerId())) {
+                return;
+            }
+            String platform = msg.getPayloadValue("platform");
+            String requester = msg.getPayloadValue("requester");
+            String arenaId = msg.getPayloadValue("arenaId");
+            String eventId = msg.getPayloadValue("eventId");
+            if (platform == null || arenaId == null || eventId == null) {
+                return;
+            }
+            Runnable dispatch = () -> chaosModule.getStreamEventBridge().handleTrigger(
+                    new StreamTriggerRequest(
+                            platform,
+                            requester != null ? requester : "stream",
+                            arenaId,
+                            eventId,
+                            msg.getTimestamp()
+                    )
+            );
+            if (plugin.isEnabled()) {
+                Bukkit.getScheduler().runTask(plugin, dispatch);
+            }
+        });
+
+        if (networkManager instanceof RedisNetworkManager redisNetworkManager) {
+            redisNetworkManager.setOnReconnectCallback(() -> {
+                networkManager.updateLocalHeartbeat(networkManager.getLocalServerInfo().onlinePlayers());
+                for (Arena arena : arenaManager.getAllArenas()) {
+                    networkManager.publishArenaStatus(
+                            ArenaStatusSnapshot.fromArena(configManager.getServerId(), arena)
+                    );
+                }
+            });
+        }
+    }
+
     private void registerListeners() {
         plugin.getServer().getPluginManager().registerEvents(
                 new PlayerLifecycleListener(
                         configManager.getServerId(),
                         arenaManager,
                         playerManager,
+                        matchmakingManager,
                         gameManager,
                         countdownManager,
                         networkManager
@@ -333,6 +387,7 @@ public final class CoreModule {
         this.heartbeatTask = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
             networkManager.updateLocalHeartbeat(Bukkit.getOnlinePlayers().size());
             networkManager.detectUnavailableServers(Instant.now());
+            matchmakingManager.cleanupExpiredReservations(Instant.now());
             for (Arena arena : arenaManager.getAllArenas()) {
                 networkManager.publishArenaStatus(ArenaStatusSnapshot.fromArena(configManager.getServerId(), arena));
             }

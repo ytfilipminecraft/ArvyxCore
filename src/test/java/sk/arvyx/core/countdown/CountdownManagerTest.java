@@ -10,7 +10,12 @@ import sk.arvyx.core.util.Logger;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -51,6 +56,43 @@ class CountdownManagerTest {
 
         // Duplicitný štart musí byť zamietnutý
         assertFalse(countdownManager.startCountdown(arena, a -> {}));
+    }
+
+    @Test
+    void allowsOnlySingleSessionUnderConcurrentStartAttempts() throws InterruptedException {
+        arena.addPlayer(UUID.randomUUID());
+        arena.addPlayer(UUID.randomUUID());
+
+        int threads = 8;
+        CountDownLatch ready = new CountDownLatch(threads);
+        CountDownLatch go = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(threads);
+        AtomicInteger successes = new AtomicInteger();
+
+        try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
+            for (int i = 0; i < threads; i++) {
+                pool.execute(() -> {
+                    ready.countDown();
+                    try {
+                        go.await();
+                        if (countdownManager.startCountdown(arena, a -> {})) {
+                            successes.incrementAndGet();
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } finally {
+                        done.countDown();
+                    }
+                });
+            }
+            assertTrue(ready.await(3, TimeUnit.SECONDS));
+            go.countDown();
+            assertTrue(done.await(3, TimeUnit.SECONDS));
+        }
+
+        assertEquals(1, successes.get());
+        assertEquals(ArenaState.STARTING, arena.getState());
+        assertTrue(countdownManager.isCountingDown("skyrush-a1"));
     }
 
     @Test
