@@ -184,14 +184,20 @@ class MatchmakingTest {
                 "lobby",
                 "skyrush-1",
                 Map.of(
+                        "requestId", "test-request-1",
                         "playerUuid", reservedRemotePlayer.toString(),
                         "arenaId", "skyrush-1a",
                         "expiresAtEpochMs", String.valueOf(exp.toEpochMilli())
                 )
         );
         AtomicReference<NetworkMessage> dispatched = new AtomicReference<>(transferMsg);
+        AtomicReference<NetworkMessage> ack = new AtomicReference<>();
+        networkManager.registerHandler(NetworkMessageType.PLAYER_TRANSFER_ACK, ack::set);
         assertTrue(matchmakingManager.handleIncomingReservationRequest(dispatched.get()));
         assertTrue(backendArena.hasValidReservation(reservedRemotePlayer, Instant.now()));
+        assertNotNull(ack.get());
+        assertEquals("test-request-1", ack.get().getPayloadValue("requestId"));
+        assertEquals("true", ack.get().getPayloadValue("accepted"));
 
         // Nerezervovaný hráč nesmie obsadiť posledné rezervované miesto
         assertEquals(MatchmakingManager.MatchmakingResult.Status.NO_ARENA_AVAILABLE,
