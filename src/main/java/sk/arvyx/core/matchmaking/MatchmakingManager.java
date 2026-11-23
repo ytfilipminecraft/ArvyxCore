@@ -117,8 +117,6 @@ public final class MatchmakingManager {
             return Optional.empty();
         }
         Instant now = Instant.now();
-        pruneExpiredOutboundReservations(now);
-
         return networkManager.getJoinableRemoteArenas(type).stream()
                 .filter(snapshot -> {
                     int pending = countOutboundFor(snapshot.serverId(), snapshot.arenaId());
