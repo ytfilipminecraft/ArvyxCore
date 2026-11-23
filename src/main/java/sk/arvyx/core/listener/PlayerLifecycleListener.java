@@ -76,6 +76,9 @@ public final class PlayerLifecycleListener implements Listener {
     public void onPlayerQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
+        if (matchmakingManager != null) {
+            matchmakingManager.cancelOutboundReservation(uuid);
+        }
         Optional<Arena> arenaOpt = arenaManager.findArenaByPlayer(uuid);
 
         ArenaState stateBeforeRemove = arenaOpt.map(Arena::getState).orElse(null);
