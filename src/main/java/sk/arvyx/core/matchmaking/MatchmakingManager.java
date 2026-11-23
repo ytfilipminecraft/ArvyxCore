@@ -2,6 +2,8 @@ package sk.arvyx.core.matchmaking;
 
 import org.bukkit.GameMode;
 import org.bukkit.entity.Player;
+import org.bukkit.Bukkit;
+import org.bukkit.plugin.Plugin;
 import sk.arvyx.core.arena.Arena;
 import sk.arvyx.core.arena.ArenaManager;
 import sk.arvyx.core.arena.ArenaState;
@@ -49,7 +51,7 @@ public final class MatchmakingManager {
         }
     }
 
-    private record OutboundReservation(UUID playerId, String serverId, String arenaId, Instant expiresAt) {
+    private record OutboundReservation(UUID playerId, String requestId, String serverId, String arenaId, Instant expiresAt) {
     }
 
     private final String localServerId;
@@ -64,6 +66,7 @@ public final class MatchmakingManager {
 
     private ConfigManager configManager;
     private MessageFormatter messageFormatter;
+    private Plugin plugin;
 
     public MatchmakingManager(
             String localServerId,
@@ -84,8 +87,13 @@ public final class MatchmakingManager {
     }
 
     public void attachRuntime(ConfigManager configManager, MessageFormatter messageFormatter) {
+        this(configManager, messageFormatter, null);
+    }
+
+    public void attachRuntime(ConfigManager configManager, MessageFormatter messageFormatter, Plugin plugin) {
         this.configManager = configManager;
         this.messageFormatter = messageFormatter;
+        this.plugin = plugin;
     }
 
     public Optional<Arena> selectBestLocalArena(ArenaType type) {
@@ -195,11 +203,29 @@ public final class MatchmakingManager {
             return false;
         }
         Arena arena = arenaOpt.get();
+        String requestId = message.getPayloadValue("requestId");
+        if (requestId == null || requestId.isBlank()
+                || !message.getSourceServerId().matches("[a-zA-Z0-9_-]+")
+                || !expiresAt.isAfter(Instant.now())) {
+            return false;
+        }
+
         boolean reserved = arena.reserveSlot(playerUuid, expiresAt, Instant.now());
         if (reserved) {
             logger.debug("Rezervované miesto v aréne '" + arena.getId() + "' pre hráča " + playerUuid);
             networkManager.publishArenaStatus(ArenaStatusSnapshot.fromArena(localServerId, arena));
         }
+        networkManager.sendMessage(NetworkMessage.direct(
+                NetworkMessageType.PLAYER_TRANSFER_ACK,
+                localServerId,
+                message.getSourceServerId(),
+                Map.of(
+                        "requestId", requestId,
+                        "playerUuid", playerUuid.toString(),
+                        "arenaId", arenaId,
+                        "accepted", String.valueOf(reserved)
+                )
+        ));
         return reserved;
     }
 
@@ -241,13 +267,17 @@ public final class MatchmakingManager {
         }
         ArenaStatusSnapshot remote = remoteOpt.get();
         Instant expiresAt = now.plusSeconds(RESERVATION_TTL_SECONDS);
-        outboundReservations.put(playerId, new OutboundReservation(playerId, remote.serverId(), remote.arenaId(), expiresAt));
+        String requestId = UUID.randomUUID().toString();
+        outboundReservations.put(playerId, new OutboundReservation(
+                playerId, requestId, remote.serverId(), remote.arenaId(), expiresAt
+        ));
 
         networkManager.sendMessage(NetworkMessage.direct(
                 NetworkMessageType.PLAYER_TRANSFER_REQUEST,
                 localServerId,
                 remote.serverId(),
                 Map.of(
+                        "requestId", requestId,
                         "playerUuid", playerId.toString(),
                         "arenaId", remote.arenaId(),
                         "gameType", type.name(),
@@ -261,6 +291,76 @@ public final class MatchmakingManager {
         if (playerId != null) {
             outboundReservations.remove(playerId);
         }
+    }
+
+    /**
+     * Spracuje ACK z cieľového backendu. Túto metódu musí volať hlavné Bukkit vlákno.
+     */
+    public boolean handleTransferAcknowledgement(NetworkMessage message) {
+        if (message == null || message.getType() != NetworkMessageType.PLAYER_TRANSFER_ACK) {
+            return false;
+        }
+        String rawUuid = message.getPayloadValue("playerUuid");
+        String requestId = message.getPayloadValue("requestId");
+        String acceptedValue = message.getPayloadValue("accepted");
+        if (rawUuid == null || requestId == null || acceptedValue == null) {
+            return false;
+        }
+
+        UUID playerId;
+        try {
+            playerId = UUID.fromString(rawUuid);
+        } catch (IllegalArgumentException ex) {
+            return false;
+        }
+
+        OutboundReservation pending = outboundReservations.get(playerId);
+        if (pending == null
+                || !pending.requestId().equals(requestId)
+                || !pending.serverId().equalsIgnoreCase(message.getSourceServerId())
+                || !localServerId.equalsIgnoreCase(message.getTargetServerId())
+                || !pending.arenaId().equals(message.getPayloadValue("arenaId"))) {
+            return false;
+        }
+        if (!outboundReservations.remove(playerId, pending)) {
+            return false;
+        }
+
+        Player player = Bukkit.getPlayer(playerId);
+        if (!"true".equalsIgnoreCase(acceptedValue)
+                || !pending.expiresAt().isAfter(Instant.now())
+                || player == null || !player.isOnline()) {
+            if (player != null && player.isOnline()) {
+                sendMsg(player, "matchmaking.no-arena-available", Map.of("type", "požadovaná hra"));
+            }
+            return true;
+        }
+
+        if (!playerManager.transferToServer(player, pending.serverId())) {
+            sendMsg(player, "matchmaking.no-arena-available", Map.of("type", "požadovaná hra"));
+            logger.warn("Velocity presun hráča " + playerId + " zlyhal po potvrdenej rezervácii v "
+                    + pending.serverId() + "; cieľová rezervácia vyprší automaticky.");
+        }
+        return true;
+    }
+
+    /**
+     * Zruší čakajúce požiadavky po ich TTL; timeout nikdy nespustí presun hráča.
+     */
+    public int expirePendingTransfers(Instant now) {
+        int expired = 0;
+        for (Map.Entry<UUID, OutboundReservation> entry : outboundReservations.entrySet()) {
+            OutboundReservation reservation = entry.getValue();
+            if (!reservation.expiresAt().isAfter(now)
+                    && outboundReservations.remove(entry.getKey(), reservation)) {
+                expired++;
+                Player player = Bukkit.getPlayer(entry.getKey());
+                if (player != null && player.isOnline()) {
+                    sendMsg(player, "matchmaking.no-arena-available", Map.of("type", "požadovaná hra"));
+                }
+            }
+        }
+        return expired;
     }
 
     /**
@@ -294,10 +394,8 @@ public final class MatchmakingManager {
                     "arena", remote.arenaId(),
                     "server", remote.serverId()
             ));
-            if (playerManager.transferToServer(player, remote.serverId())) {
-                return new MatchmakingResult(MatchmakingResult.Status.TRANSFERRED_REMOTE, null, remote, false);
-            }
-            cancelOutboundReservation(uuid);
+            // Presun sa vykoná až po PLAYER_TRANSFER_ACK z cieľového backendu.
+            return new MatchmakingResult(MatchmakingResult.Status.TRANSFERRED_REMOTE, null, remote, false);
         }
 
         sendMsg(player, "matchmaking.no-arena-available", Map.of("type", type.getDisplayName()));
@@ -357,6 +455,7 @@ public final class MatchmakingManager {
     public int cleanupExpiredReservations(Instant now) {
         Objects.requireNonNull(now, "now nesmie byť null");
         int removed = pruneExpiredOutboundReservations(now);
+        removed += expirePendingTransfers(now);
         for (Arena arena : arenaManager.getAllArenas()) {
             removed += arena.pruneExpiredReservations(now);
         }
